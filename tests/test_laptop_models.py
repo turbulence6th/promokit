@@ -16,7 +16,7 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from promokit import cable, devices, layout, story  # noqa: E402
+from promokit import devices, layout, story  # noqa: E402
 from promokit.util import PromoError  # noqa: E402
 
 WIN = {"model": "windows"}
@@ -92,24 +92,6 @@ class WindowsBody(unittest.TestCase):
             (_, _, lw, lh), (_, _, tw, th) = r["laptop"], r["tablet"]
             self.assertAlmostEqual(lw / lh, aspect, places=6)
             self.assertAlmostEqual((lw ** 2 + lh ** 2) ** .5 / (tw ** 2 + th ** 2) ** .5, diag / 11.5, places=6)
-
-    def test_cable_plugs_into_the_models_base(self):
-        """Fiş alt gövdenin SAĞ yüzüne, ön yüzün yüksekliği içinde oturur — model geometrisinden; aynı dikdörtgende
-        iki modelin yuvası farklı (sabit nokta değil)."""
-        rect, tab = (100.0, 100.0, 700.0, 437.5), (900.0, 260.0, 420.0, 276.0)
-        ports = {}
-        for name, o in (("macbook", {}), ("windows", WIN)):
-            an = cable.anchors(layout.DevicePose("laptop", rect, None, o), tab)
-            x, y = an["mac"]
-            g = devices.geometry("laptop", rect[2], rect[3], o)
-            L = devices.laptop_spec(o)
-            base_top = rect[1] + rect[3] + rect[2] * (L["chin"] + L["hinge"] * devices.HINGE_SHOW)
-            self.assertAlmostEqual(x, rect[0] + g.right, places=6, msg=name)
-            self.assertLess(base_top, y, name)
-            self.assertLess(y, rect[1] + g.bottom, name)
-            self.assertEqual((x, y), tuple(a + b for a, b in zip(rect[:2], devices.laptop_port(rect[2], rect[3], o))))
-            ports[name] = (x, y)
-        self.assertNotEqual(ports["macbook"], ports["windows"])
 
     def test_lid_starts_closing_without_a_jump(self):
         """Kapak kapanması (`render._closing_laptop`) MODELİN oranlarıyla çizer: kapanışın ilk karesi açık gövdeyle

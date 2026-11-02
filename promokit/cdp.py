@@ -39,9 +39,8 @@ BROWSERS = (["/Applications/" + a for a in _MAC_APPS] + ["~/Applications/" + a f
     "/usr/bin/chromium", "/usr/bin/google-chrome",
 ])
 
-# ⛔ `--allow-file-access-from-files` YOK: şablonlar `shared/…` dosyalarını <script>/<link>/<img> ile
-# yüklüyor ve bunlar file:// sayfasında bayraksız çalışır (ölçüldü: menü çubuğu kuruluyor, dock simgesi
-# yükleniyor). Bayrak yalnız fetch/XHR ile HER yerel dosyayı okumayı açıyordu — ağa açık başsız tarayıcıda
+# ⛔ `--allow-file-access-from-files` YOK: sayfalar yan dosyalarını (CSS/JS/SVG) <script>/<link>/<img> ile
+# yüklüyor ve bunlar file:// sayfasında bayraksız çalışır (ölçüldü: examples/site/ yükleniyor). Bayrak yalnız fetch/XHR ile HER yerel dosyayı okumayı açıyordu — ağa açık başsız tarayıcıda
 # gereksiz bir sızdırma yüzeyi (tests/test_html.py `test_pages_load_without_file_access_flag`).
 # ⛔ `MacAppCodeSignClone` KAPALI (2026-10-23 açılış kilidi): Chromium macOS'ta her açılışta uygulamanın ~1.433
 # dosyalık klonunu /var/folders/…/X/ altına açar ve yalnız düzenli kapanışta siler; kalanları macOS açılışta

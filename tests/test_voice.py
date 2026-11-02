@@ -137,7 +137,7 @@ class TestPronunciation(unittest.TestCase):
         self.assertEqual(sp("İkisi de Mac'inize ayrı bir ekran."), "İkisi de Mek'inize ayrı bir ekran.")
         self.assertEqual(sp("MacBook'un kapağını kapatın"), "Mekbuk'un kapağını kapatın")
         self.assertEqual(sp("Aynı Wi-Fi'da tablet"), "Aynı vayfay'da tablet")
-        self.assertEqual(sp("Üç parmakla Mission Control."), "Üç parmakla Mişın Kontrol.")
+        self.assertEqual(sp("Dokuz Mac ekranı."), "Dokuz Mek ekranı.")
         self.assertEqual(sp("Geliştirici modu yok, ADB yok."), "Geliştirici modu yok, ey di bi yok.")
         self.assertEqual(sp("Macera ve MACRO"), "Macera ve MACRO")          # kelime içi / başka kelime: dokunma
 

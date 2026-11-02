@@ -5,12 +5,11 @@ dizinine göre çözülür. Bilinmeyen anahtar → yakın eşleşme önerisiyle 
 hatası sessizce yok sayılırsa video "neden zoom yapmadı" diye saatler yer). Değerler de
 YÜKLEMEDE denetlenir: hatalı bir yumuşatma adı ya da renk, render'ın ortasında (paralel
 parçalar bittikten sonra) ham traceback olarak çıkmasın.
-Örnek: examples/ornek.toml · alan listesi: README.md §Senaryo.
+Örnek: examples/site.toml · alan listesi: README.md §Senaryo.
 """
 from __future__ import annotations
 
 import difflib
-import json
 import os
 import tomllib
 from dataclasses import dataclass, field
@@ -22,22 +21,22 @@ ASPECTS = {"16:9": (16, 9), "9:16": (9, 16), "4:5": (4, 5), "1:1": (1, 1), "4:3"
 SIZE_ALIASES = {"720p": 720, "1080p": 1080, "1440p": 1440, "4k": 2160, "2160p": 2160}
 
 VIDEO_KEYS = {
-    "aspect", "size", "fps", "theme", "background", "hand", "hand_scale", "font", "music", "music_volume", "music_mood",
-    "transition", "transition_dur", "caption_size", "laptop_finish", "tablet_color", "ripple",
-    "codec", "crf", "out", "title", "latency", "lang", "laptop_model",
+    "aspect", "size", "fps", "theme", "background", "font", "music", "music_volume", "music_mood",
+    "transition", "transition_dur", "caption_size", "laptop_finish", "tablet_color",
+    "codec", "crf", "out", "title", "lang", "laptop_model",
 }
 SCENE_KEYS = {
-    "type", "duration", "layout", "tablet", "laptop", "take", "touches", "touch_offset", "gestures", "caption",
-    "subcaption", "captions", "camera", "transition", "transition_dur", "hand", "hand_scale", "title",
-    "subtitle", "badge", "portrait", "landscape", "note", "keys_at", "ripple",
-    "page", "params", "anim", "cable", "wifi", "voice", "sound", "still",
+    "type", "duration", "layout", "tablet", "laptop", "caption",
+    "subcaption", "captions", "camera", "transition", "transition_dur", "title",
+    "subtitle", "badge", "portrait", "landscape", "note",
+    "page", "params", "scroll", "scroller", "anim", "voice", "still",
 }
-MEDIA_KEYS = {"src", "in", "out", "speed", "loop", "fit", "color", "params"}
+MEDIA_KEYS = {"src", "in", "out", "speed", "loop", "fit", "color", "params", "scroll", "scroller"}
+SCROLL_KEYS = {"t", "y", "to", "dur", "ease", "offset"}
 SCENE_TYPES = {"device", "title", "outro", "html"}
 ANIM_KEYS = {"t", "x", "y", "s", "o", "on", "lid", "rot", "ease"}
 LAYOUTS = {"tablet", "laptop", "duo"}
 LAYOUT_DEVICES = {"tablet": ("tablet",), "laptop": ("laptop",), "duo": ("laptop", "tablet")}
-HANDS = {"skin", "skin-dark", "ghost", "none"}
 TRANSITIONS = ("auto", "morph", "fade", "cut", "slide")
 THEMES = ("light", "dark")
 CODECS = ("h264", "hevc", "prores")
@@ -108,19 +107,19 @@ class MediaRef:
     loop: bool = False
     fit: str = "cover"
     params: dict = field(default_factory=dict)   # HTML ekrana giden sayfa parametreleri (promo.params)
+    scroll: list = field(default_factory=list)   # HTML ekran: kaydırma hareketleri [{t, y|to, dur, ease, offset}]
+    scroller: str | None = None                  # kaydırılan öğenin CSS seçicisi (yoksa sayfanın kendisi)
 
 
 @dataclass
 class VideoCfg:
-    lang: str = "tr"              # ekran dili: her HTML sayfanın `params.lang`ine iner (shared/i18n.js çevirir)
+    lang: str = "tr"              # ekran dili: her HTML sayfanın `params.lang`ine iner + çıktı klasörü/altyazı dili
     width: int = 1920
     height: int = 1080
     aspect: str = "16:9"
     fps: float = 60.0
     theme: str = "light"
     background: str | None = None
-    hand: str = "none"            # el yok → dokunulan yerde daire (el stilleri isteğe bağlı)
-    hand_scale: float = 1.0
     font: str | None = None
     music: str | None = None
     music_volume: float = 0.8
@@ -132,12 +131,10 @@ class VideoCfg:
     laptop_model: str = "macbook"     # macbook (14" MacBook Pro) | windows (genel Windows dizüstü) — devices.LAPTOP_MODELS
     laptop_finish: str = ""           # boş → modelin varsayılanı (MacBook silver · Windows graphite)
     tablet_color: str = "frame"
-    ripple: bool = True           # dokunuş göstergesi (daire; el varsa uzun bas halkası) açık/kapalı
     codec: str = "h264"
     crf: int = 16
     out: str | None = None        # varsayılan çıktı yolu (senaryoya göreli; `-o` ezer)
     title: str = ""               # çıktının başlık metaverisi
-    latency: float = 0.0   # HTML ekranın dokunuşa tepki gecikmesi (sn) — gerçekçilik için ~0.03-0.05
 
     @property
     def portrait(self) -> bool:
@@ -152,29 +149,21 @@ class Scene:
     layout: str = "tablet"
     tablet: MediaRef | None = None
     laptop: MediaRef | None = None
-    touches: str | None = None
-    touch_offset: float = 0.0
-    gestures: list = field(default_factory=list)
     caption: str = ""
     subcaption: str = ""
     captions: list = field(default_factory=list)
     camera: list = field(default_factory=list)
     transition: str | None = None
     transition_dur: float | None = None
-    hand: str | None = None
-    hand_scale: float | None = None
     title: str = ""
     subtitle: str = ""
     badge: str = ""
-    ripple: bool | None = None
-    keys_at: list | None = None   # tuş çiplerinin yeri [x, y] (tablet ekranı normalize)
     page: str | None = None       # type="html": tam ekran sayfa
+    scroll: list = field(default_factory=list)   # type="html": sayfanın kaydırma hareketleri
+    scroller: str | None = None   # type="html": kaydırılan öğenin seçicisi (yoksa sayfanın kendisi)
     still: float | None = None    # sahnenin bu anı (sn) — `promo.py stills` o kareyi PNG/JPG olarak yazar
     params: dict = field(default_factory=dict)
     anim: dict = field(default_factory=dict)      # cihaz → anahtar kareler (x/y/s/o/on/lid/rot)
-    cable: dict | None = None     # {t, dur, out}: MacBook ↔ tablet USB-C takılma (out=true: çıkarılma)
-    wifi: dict | None = None      # {t, dur}: cihazlar arasında Wi-Fi dalgaları (kablosuz bağlantı)
-    sound: dict | None = None     # {t, dur}: tabletin hoparlörlerinden (kısa kenarlar) ses dalgaları
     voice: list = field(default_factory=list)   # [{t, text, src?}]: seslendirme satırları (sahne zamanı)
     # çalışma anında doldurulur
     start: float = 0.0
@@ -262,7 +251,9 @@ def _media(v, where: str) -> MediaRef | None:
                      speed=_num(v.get("speed", 1.0), f"{where}.speed", above=0.0),
                      loop=_bool(v.get("loop", False), f"{where}.loop"),
                      fit=_enum(v.get("fit", "cover"), ("cover", "contain"), f"{where}.fit"),
-                     params=dict(v.get("params", {})))
+                     params=dict(v.get("params", {})),
+                     scroll=_scroll(v.get("scroll", []), f"{where}.scroll"),
+                     scroller=str(v["scroller"]) if "scroller" in v else None)
         if m.color is not None:
             _color(m.color, f"{where}.color")
         if m.clip_out is not None and m.clip_out <= m.clip_in:
@@ -300,6 +291,35 @@ def _anim(anim, where: str) -> dict:
     return anim
 
 
+def _scroll(moves, where: str) -> list:
+    """Sayfa kaydırma hareketleri: `{ t, y | to, dur, ease, offset }` — her hareket `t`de, o anki konumdan başlayıp
+    `dur` sn'de hedefe varır. `y` = piksel (CSS px, sayfanın başından) · `to` = bir CSS seçici (öğenin üstü; `offset`
+    px kaydırır). Hareketler ZAMAN SIRASINDA ve birbirini beklemeli (çakışma hata)."""
+    moves = _list_of_tables(moves, where)
+    out = []
+    for i, m in enumerate(moves):
+        w = f"{where}[{i + 1}]"
+        _check_keys(m, SCROLL_KEYS, w)
+        if ("y" in m) == ("to" in m):
+            raise PromoError(f"{w}: tam olarak biri gerekli — y = piksel  ya da  to = \"#seçici\"")
+        d = {"t": _num(m.get("t", 0.0), f"{w}.t", lo=0.0), "dur": _num(m.get("dur", 1.0), f"{w}.dur", lo=0.0),
+             "ease": _ease(m.get("ease", "inout"), w)}
+        if "y" in m:
+            d["y"] = _num(m["y"], f"{w}.y", lo=0.0)
+        else:
+            if not isinstance(m["to"], str) or not m["to"].strip():
+                raise PromoError(f"{w}.to: CSS seçici (ör. \"#fiyat\") olmalı (gelen: {m['to']!r})")
+            d["to"] = m["to"]
+            d["offset"] = _num(m.get("offset", 0.0), f"{w}.offset")
+        out.append(d)
+    out.sort(key=lambda d: d["t"])
+    for a, b in zip(out, out[1:]):
+        if b["t"] < a["t"] + a["dur"] - 1e-9:
+            raise PromoError(f"{where}: hareketler çakışıyor — t={a['t']:g} (dur {a['dur']:g} sn) bitmeden "
+                             f"t={b['t']:g} başlıyor")
+    return out
+
+
 def _camera(cam, layout: str, where: str) -> list:
     cam = _list_of_tables(cam, where)
     for kf in cam:
@@ -318,15 +338,6 @@ def _camera(cam, layout: str, where: str) -> list:
         if "on" in kf:
             _enum(kf["on"], LAYOUT_DEVICES[layout], f"{where}.on (yerleşim '{layout}')")
     return cam
-
-
-def _timed(spec, keys: set, where: str, dur_lo: float = 0.0) -> dict:
-    _check_keys(spec, keys, where)
-    if "t" in spec:
-        _num(spec["t"], f"{where}.t", lo=0.0)
-    if "dur" in spec:
-        _num(spec["dur"], f"{where}.dur", lo=dur_lo)
-    return dict(spec)
 
 
 VOICE_KEYS = {"engine", "lang", "id", "model", "stability", "similarity", "style", "speed", "volume", "lexicon",
@@ -383,23 +394,20 @@ def load(path: str, aspect: str | None = None, short: int | None = None, fps: fl
     vd = doc.get("video", {})
     _check_keys(vd, VIDEO_KEYS, "[video]")
     v = VideoCfg()
-    for k, lo, above in (("fps", 1.0, None), ("hand_scale", None, 0.0), ("music_volume", 0.0, None),
-                         ("transition_dur", 0.0, None), ("caption_size", None, 0.0), ("latency", 0.0, None)):
+    for k, lo, above in (("fps", 1.0, None), ("music_volume", 0.0, None),
+                         ("transition_dur", 0.0, None), ("caption_size", None, 0.0)):
         if k in vd:
             setattr(v, k, _num(vd[k], f"[video] {k}", lo=lo, above=above))
-    for k in ("theme", "background", "hand", "font", "music", "transition", "laptop_finish", "tablet_color",
+    for k in ("theme", "background", "font", "music", "transition", "laptop_finish", "tablet_color",
               "codec", "out", "title", "lang", "laptop_model", "music_mood"):
         if k in vd:
             setattr(v, k, str(vd[k]))
-    if "ripple" in vd:
-        v.ripple = _bool(vd["ripple"], "[video] ripple")
     if "crf" in vd:
         v.crf = int(_num(vd["crf"], "[video] crf", lo=0, hi=51))
     v.aspect = aspect or str(vd.get("aspect", "16:9"))
     v.width, v.height = size_for(v.aspect, _size(short if short is not None else vd.get("size", 1080)))
     if fps is not None:
         v.fps = _num(fps, "fps", lo=1.0)
-    _enum(v.hand, sorted(HANDS), "[video] hand")
     _enum(v.lang, VOICE_LANGS, "[video] lang")
     _enum(v.transition, TRANSITIONS, "[video] transition")
     _enum(v.theme, THEMES, "[video] theme")
@@ -438,16 +446,6 @@ def load(path: str, aspect: str | None = None, short: int | None = None, fps: fl
         sc.layout = _enum(str(sd.get("layout", "tablet")), sorted(LAYOUTS), f"{where}: layout")
         sc.tablet = _media(sd.get("tablet"), f"{where}.tablet")
         sc.laptop = _media(sd.get("laptop"), f"{where}.laptop")
-        if "take" in sd:
-            _apply_take(sc, sd["take"], base, where)
-        if "touches" in sd:
-            sc.touches = str(sd["touches"])
-        # çekimin kendi senkron ofsetinin ÜSTÜNE elle ince ayar
-        sc.touch_offset += _num(sd.get("touch_offset", 0.0), f"{where}.touch_offset")
-        gestures = sd.get("gestures", [])
-        if not isinstance(gestures, list):
-            raise PromoError(f"{where}.gestures: [ {{ t = …, tap = … }}, … ] listesi olmalı")
-        sc.gestures = list(gestures)
         for k in ("caption", "subcaption", "title", "subtitle", "badge"):
             if k in sd:
                 setattr(sc, k, str(sd[k]))
@@ -462,17 +460,6 @@ def load(path: str, aspect: str | None = None, short: int | None = None, fps: fl
             sc.transition = _enum(str(sd["transition"]), TRANSITIONS, f"{where}: transition")
         if "transition_dur" in sd:
             sc.transition_dur = _num(sd["transition_dur"], f"{where}.transition_dur", lo=0.0)
-        if "hand" in sd:
-            sc.hand = _enum(str(sd["hand"]), sorted(HANDS), f"{where}: hand")
-        if "hand_scale" in sd:
-            sc.hand_scale = _num(sd["hand_scale"], f"{where}.hand_scale", above=0.0)
-        if "ripple" in sd:
-            sc.ripple = _bool(sd["ripple"], f"{where}.ripple")
-        if "keys_at" in sd:
-            ka = sd["keys_at"]
-            if not isinstance(ka, list) or len(ka) != 2:
-                raise PromoError(f"{where}.keys_at: [x, y] olmalı (gelen: {ka!r})")
-            sc.keys_at = [_num(x, f"{where}.keys_at") for x in ka]
         if "still" in sd:
             sc.still = _num(sd["still"], f"{where}.still", lo=0.0)
         if "page" in sd:
@@ -480,14 +467,13 @@ def load(path: str, aspect: str | None = None, short: int | None = None, fps: fl
         if sc.type == "html" and not sc.page:
             raise PromoError(f"{where}: type=\"html\" sahnede page = \"…html\" gerekli")
         sc.params = dict(sd.get("params", {}))
+        sc.scroll = _scroll(sd.get("scroll", []), f"{where}.scroll")
+        if "scroller" in sd:
+            sc.scroller = str(sd["scroller"])
+        if (sc.scroll or sc.scroller) and sc.type != "html":
+            raise PromoError(f"{where}: scroll/scroller yalnız type=\"html\" sahnede — cihaz ekranında "
+                             f"tablet = {{ src = \"…\", scroll = [ … ] }} yazın")
         sc.anim = _anim(sd.get("anim", {}), f"{where}.anim")
-        if "cable" in sd:
-            sc.cable = _timed(sd["cable"], {"t", "dur", "out"}, f"{where}.cable", dur_lo=0.05)
-            if "out" in sc.cable:
-                _bool(sc.cable["out"], f"{where}.cable.out")
-        for k in ("wifi", "sound"):
-            if k in sd:
-                setattr(sc, k, _timed(sd[k], {"t", "dur"}, f"{where}.{k}"))
         sc.voice = _list_of_tables(sd.get("voice", []), f"{where}.voice")
         for e in sc.voice:
             # tr/en/zh = altyazı çevirisi · say = motora giden okunuş (altyazı yine `text`) · speed = YALNIZ bu satırın
@@ -503,7 +489,6 @@ def load(path: str, aspect: str | None = None, short: int | None = None, fps: fl
         scenes.append(sc)
     story = Story(path=path, base=base, video=v, scenes=scenes, voice=vc)
     # ekran dili her HTML sayfaya (cihaz ekranı + tam ekran sahne); sahnenin kendi `params.lang`i ezer.
-    # Seçici çözücü de bu parametrelerle ölçer → İngilizce yerleşimde dokunuş doğru öğeye düşer.
     for sc in scenes:
         for ref in (sc.tablet, sc.laptop):
             if ref and ref.path and ref.path.lower().endswith((".html", ".htm")):
@@ -525,10 +510,6 @@ def load(path: str, aspect: str | None = None, short: int | None = None, fps: fl
                 e["src"] = story.resolve(str(e["src"]))
                 if not os.path.exists(e["src"]):
                     raise PromoError(f"[[scene]] #{sc.index + 1}: seslendirme dosyası yok: {e['src']}")
-        if sc.touches and sc.touches not in ("none",):
-            sc.touches = story.resolve(sc.touches)
-            if not os.path.exists(sc.touches):
-                raise PromoError(f"[[scene]] #{sc.index + 1}: dokunuş kaydı yok: {sc.touches}")
     _resolve_durations(story)
     for sc in scenes:
         if sc.still is not None and sc.still > sc.duration:
@@ -554,26 +535,6 @@ def load(path: str, aspect: str | None = None, short: int | None = None, fps: fl
         if not os.path.exists(story.voice.prompt):
             raise PromoError(f"[voice] prompt: referans kaydı yok: {story.voice.prompt}")
     return story
-
-
-def _apply_take(sc: Scene, take: str, base: str, where: str):
-    """`take = "work/takes/x"` → o çekimin ekran kaydı + dokunuşları + senkron ofseti."""
-    d = take if os.path.isabs(take) else os.path.join(base, take)
-    meta_p = os.path.join(d, "take.json")
-    if not os.path.exists(meta_p):
-        raise PromoError(f"{where}: çekim bulunamadı ({meta_p})")
-    with open(meta_p, encoding="utf-8") as f:
-        meta = json.load(f)
-    screen = meta.get("screen")
-    if screen and sc.tablet is None:
-        sc.tablet = MediaRef(path=os.path.join(d, screen))
-    elif screen and sc.tablet is not None and not sc.tablet.path:
-        sc.tablet.path = os.path.join(d, screen)
-    if meta.get("mac_screen") and sc.laptop is None:
-        sc.laptop = MediaRef(path=os.path.join(d, meta["mac_screen"]))
-    if meta.get("touches") and sc.touches is None:
-        sc.touches = os.path.join(d, meta["touches"])
-    sc.touch_offset = float(meta.get("touch_offset", 0.0))
 
 
 def _resolve_durations(story: Story):

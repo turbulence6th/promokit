@@ -14,7 +14,6 @@ from __future__ import annotations
 import math
 
 from .devices import HINGE_SHOW, LAPTOP_MODELS, geometry, laptop_model, laptop_spec, lid_view
-from .hand import Camera
 from .util import PromoError, clamp, ease, lerp, rot
 
 # ekran köşegeni (inç): MatePad 11,5 · MacBook Pro 14 (14,2) — dizüstünün değeri MODELİN (`diag`)
@@ -32,12 +31,6 @@ def diag(kind: str, opts: dict | None = None) -> float:
 def default_aspect(kind: str, opts: dict | None = None) -> float:
     """Medyasız ekran oranı; dizüstünde modelin şablon görünüm alanı."""
     return laptop_model(opts)["aspect"] if kind == "laptop" else DEFAULT_ASPECT[kind]
-# Dikey (üst üste) yerleşimde kablo Mac'in SAĞ yanından tabletin sağ yuvasına iner: fiş + kıvrım
-# payı (tablet ekran yüksekliği birimi). İki yana ayrılır → grup ortalı kalır.
-CABLE_ROOM = 0.17
-# `sound` sahnesinde tek tablet: kısa kenarların dışındaki ses dalgalarına pay (dikey kadrajda tablet
-# kutuyu enine doldurur, dalgalar kadraj kenarında kırpılıyordu). Tablet ekran yüksekliği birimi.
-SOUND_ROOM = 0.16
 
 
 def screen_dims(diag_px: float, aspect: float):
@@ -83,11 +76,9 @@ def content_box(W: int, H: int, caption_size: float = 1.0, band: float | None = 
     return (mx, top, W - mx, H - bottom)
 
 
-def place(W: int, H: int, layout: str, aspects: dict, box=None, cable_room: bool = False,
-          sound_room: bool = False, opts: dict | None = None) -> dict:
+def place(W: int, H: int, layout: str, aspects: dict, box=None, opts: dict | None = None) -> dict:
     """{'tablet': (x, y, w, h), 'laptop': (…)} — yalnız yerleşimdeki cihazlar. `box`: içerik kutusu
-    (render'ın başlık bandını bilen kutusu; verilmezse varsayılan). `cable_room`: üst üste yerleşimde
-    kabloya iki yandan pay ayır. `sound_room`: tek tabletin kısa kenarlarına ses dalgası payı. `opts`:
+    (render'ın başlık bandını bilen kutusu; verilmezse varsayılan). `opts`:
     cihaz → seçenekler (`{"laptop": {"model": "windows"}}` — köşegen + gövde modelin; vars. MacBook)."""
     kinds = {"tablet": ["tablet"], "laptop": ["laptop"], "duo": ["laptop", "tablet"]}[layout]
     boxes = {}
@@ -99,12 +90,10 @@ def place(W: int, H: int, layout: str, aspects: dict, box=None, cable_room: bool
         boxes[k] = (sw, sh, g)
     # Gövdeleri birim ölçekte diz (ekran sol-üstü konumları)
     pos = {}
-    room = 0.0
     if len(kinds) == 1:
         k = kinds[0]
         sw, sh, g = boxes[k]
         pos[k] = (-g.left, -g.top)
-        room = SOUND_ROOM * sh if (sound_room and k == "tablet") else 0.0
     else:
         lw, lh, lg = boxes["laptop"]
         tw, th, tg = boxes["tablet"]
@@ -120,11 +109,10 @@ def place(W: int, H: int, layout: str, aspects: dict, box=None, cable_room: bool
             cx = max(lg.width, tg.width) / 2
             pos["laptop"] = (cx - lg.width / 2 - lg.left, -lg.top)
             pos["tablet"] = (cx - tg.width / 2 - tg.left, lg.height + gap - tg.top)
-            room = CABLE_ROOM * th if cable_room else 0.0
     # Grup kutusu
-    x0 = min(pos[k][0] + boxes[k][2].left for k in kinds) - room
+    x0 = min(pos[k][0] + boxes[k][2].left for k in kinds)
     y0 = min(pos[k][1] + boxes[k][2].top for k in kinds)
-    x1 = max(pos[k][0] + boxes[k][2].right for k in kinds) + room
+    x1 = max(pos[k][0] + boxes[k][2].right for k in kinds)
     y1 = max(pos[k][1] + boxes[k][2].bottom for k in kinds)
     cx0, cy0, cx1, cy1 = box if box is not None else content_box(W, H)
     s = min((cx1 - cx0) / (x1 - x0), (cy1 - cy0) / (y1 - y0))
@@ -135,6 +123,23 @@ def place(W: int, H: int, layout: str, aspects: dict, box=None, cable_room: bool
         sw, sh, _ = boxes[k]
         out[k] = (ox + pos[k][0] * s, oy + pos[k][1] * s, sw * s, sh * s)
     return out
+
+
+class Camera:
+    """Dünya → sahne dönüşümü: p' = A + (p − F) · z."""
+
+    def __init__(self, zoom=1.0, focus=(0.0, 0.0), anchor=(0.0, 0.0)):
+        self.zoom = zoom
+        self.focus = focus
+        self.anchor = anchor
+
+    def apply(self, p):
+        return (self.anchor[0] + (p[0] - self.focus[0]) * self.zoom,
+                self.anchor[1] + (p[1] - self.focus[1]) * self.zoom)
+
+    def rect(self, r):
+        x, y = self.apply((r[0], r[1]))
+        return (x, y, r[2] * self.zoom, r[3] * self.zoom)
 
 
 class CameraPath:

@@ -1,0 +1,35 @@
+# promokit — a pure HTML animation, rendered to video (examples/animasyon.html)
+#
+#   python3 promo.py render examples/animasyon.toml --preview
+#   python3 promo.py render examples/animasyon.toml --aspect 9:16     # same page, vertical
+#
+# `type = "html"` fills the whole frame with the page. The page animates itself (CSS keyframes + `promo.on('frame')`);
+# `params` reaches it as `promo.params`. Add `scroll = [ … ]` here to scroll a long page (see site.toml).
+[video]
+aspect = "16:9"
+size = 1080
+fps = 60
+lang = "en"
+theme = "dark"           # light captions over the dark page
+music = "bed"
+music_mood = "uplift"
+
+[voice]
+engine = "say"
+id = "Samantha"
+lang = "en"
+
+[[scene]]
+type = "html"
+page = "animasyon.html"
+duration = 5.4
+params = { headline = "HTML in, video out." }
+voice = [ { t = 0.4, text = "Write the animation in HTML." }, { t = 2.6, text = "Render it to video." } ]
+
+[[scene]]
+type = "html"
+page = "animasyon.html"
+duration = 4.2
+params = { headline = "Same page, new words." }
+caption = "Parameters come from the TOML"
+transition = "fade"

@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<!-- (1) Tells promokit the page's CSS-pixel size. Harmless in a normal browser. 1470x956 = the laptop frame's screen ratio. -->
+<meta name="promo-viewport" content="1470x956">
+<title>Example Product</title>
+<link rel="stylesheet" href="site.css">
+</head>
+<body>
+  <!-- A perfectly ordinary page: sticky nav, real document scrolling, CSS animations, an IntersectionObserver. -->
+  <header class="nav">
+    <b>Example Product</b><a href="#features">Features</a><a href="#pricing">Pricing</a><a href="#faq">FAQ</a>
+    <button class="btn">Try it free</button>
+  </header>
+
+  <main>
+    <section class="hero">
+      <div>
+        <h1 class="rise">A simpler dashboard<br>for your team.</h1>
+        <p class="rise d1">Notes, tasks and calendar in one place. No setup, no credit card.</p>
+        <button class="btn rise d2">Get started</button>
+        <button class="btn ghost rise d3">Learn more</button>
+      </div>
+      <img class="rise d2" src="hero.svg" alt="">
+    </section>
+
+    <section class="cards" id="features">
+      <div class="card reveal"><h3>Fast</h3><p>Opens in under a second.</p></div>
+      <div class="card reveal" style="transition-delay:.12s"><h3>Simple</h3><p>Only the buttons you need.</p></div>
+      <div class="card reveal" style="transition-delay:.24s"><h3>Private</h3><p>Your data stays with you.</p></div>
+    </section>
+
+    <section class="pricing" id="pricing">
+      <h2>Pricing</h2>
+      <div class="plans">
+        <div class="plan reveal"><h3>Free</h3><b>$0</b><p>For individuals getting started.</p></div>
+        <div class="plan hot reveal" style="transition-delay:.12s"><h3>Team</h3><b>$8</b><p>Per person, per month.</p></div>
+      </div>
+    </section>
+
+    <section class="faq" id="faq">
+      <h2>Frequently asked</h2>
+      <button class="q" id="q1">Is it free?</button><div class="a">The basic plan is free.</div>
+      <button class="q" id="q2">Does it work on mobile?</button><div class="a">Yes, on tablets and phones too.</div>
+      <button class="q" id="q3">Can I export my data?</button><div class="a">Yes, in one click.</div>
+    </section>
+
+    <footer class="foot">© Example Product · All rights reserved.</footer>
+  </main>
+
+  <script src="site.js"></script>
+  <!-- (2) Optional, time-driven choreography. `window.promo` exists only under promokit, so the page still works in a
+       normal browser. The handler must be a pure function of `t` (seconds): no timers, no Date.now. -->
+  <script>
+    if (window.promo) {
+      promo.on('frame', ({ t }) => {
+        document.getElementById('q2').classList.toggle('open', t >= 9.4);
+      });
+    }
+  </script>
+</body>
+</html>

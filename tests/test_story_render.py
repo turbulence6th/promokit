@@ -1,6 +1,5 @@
-"""Jest derleme, parmak ataması, el izi, senaryo doğrulama, zaman çizelgesi ve uçtan uca kare."""
+"""Senaryo doğrulama, yerleşim, kamera, geçişler, başlıklar, kodlama ve uçtan uca kare."""
 import glob
-import math
 import os
 import sys
 import tempfile
@@ -11,323 +10,11 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from PIL import Image  # noqa: E402
 
-from promokit import devices, gestures, hand, layout, story  # noqa: E402
+from promokit import devices, layout, story  # noqa: E402
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 from promokit.media import cover_crop  # noqa: E402
-from promokit.touches import Contact, TouchLog  # noqa: E402
 from promokit.util import PromoError  # noqa: E402
-
-MODEL = gestures.HandModel(fw=0.05, angle=math.radians(-14), aspect=1.5)
-
-
-class TestGestures(unittest.TestCase):
-    def test_tap_and_double_tap(self):
-        cs, keys, _ = gestures.compile_gestures([{"t": 1.0, "tap": [0.4, 0.5]},
-                                              {"t": 2.0, "double_tap": [0.2, 0.2]}], MODEL)
-        self.assertEqual(len(cs), 3)
-        self.assertAlmostEqual(cs[0].t0, 1.0)
-        self.assertEqual(cs[0].pos(1.05), (0.4, 0.5))
-        self.assertGreater(cs[2].t0, cs[1].t1)  # ikinci dokunuş birinciden SONRA
-
-    def test_scroll_is_one_finger_like_product(self):
-        # tek parmak sürükle = kaydırma (README → «Jest anlamları»)
-        cs, *_ = gestures.compile_gestures([{"t": 0.0, "scroll": [[0.5, 0.7], [0.5, 0.3]]}], MODEL)
-        self.assertEqual(len(cs), 1)
-
-    def test_drag_holds_before_moving(self):
-        cs, *_ = gestures.compile_gestures([{"t": 1.0, "drag": [[0.2, 0.5], [0.6, 0.5]], "dur": 0.5}], MODEL)
-        c = cs[0]
-        self.assertEqual(c.pos(1.0), c.pos(1.0 + gestures.GRAB_HOLD - 1e-3))   # önce tutulur
-        self.assertGreater(c.pos(c.t1)[0], c.pos(1.0)[0] + 0.3)               # sonra taşınır
-
-    def test_scroll_fingers_parallel_and_staggered(self):
-        cs, *_ = gestures.compile_gestures([{"t": 0.0, "scroll": [[0.5, 0.7], [0.5, 0.3]], "fingers": 3}], MODEL)
-        self.assertEqual(len(cs), 3)
-        for c in cs:  # her parmak aynı dikey yolu kat eder
-            self.assertAlmostEqual(c.y[0] - c.y[-1], 0.4, places=3)
-        self.assertLess(cs[0].t0, cs[2].t0)  # parmaklar aynı anda değil, art arda değer
-
-    def test_pinch_distance_changes(self):
-        cs, *_ = gestures.compile_gestures([{"t": 0.0, "pinch": [0.5, 0.5], "from": 0.05, "to": 0.2}], MODEL)
-        self.assertEqual(len(cs), 2)
-        d = lambda t: math.hypot(cs[0].pos(t)[0] - cs[1].pos(t)[0], (cs[0].pos(t)[1] - cs[1].pos(t)[1]) / 1.5)
-        self.assertAlmostEqual(d(0.0), 0.05, places=3)
-        self.assertAlmostEqual(d(cs[0].t1), 0.2, places=3)
-
-    def test_pen_and_keys(self):
-        cs, keys, _ = gestures.compile_gestures([{"t": 0.0, "pen": [[0.1, 0.1], [0.3, 0.2]]},
-                                              {"t": 1.0, "keys": "⌘ C"}], MODEL)
-        self.assertEqual(cs[0].tool, "pen")
-        self.assertEqual(keys[0].label, "⌘ C")
-
-    def test_pen_tap_tool(self):
-        cs, *_ = gestures.compile_gestures([{"t": 0.0, "tap": [0.4, 0.4], "tool": "pen"}], MODEL)
-        self.assertEqual(cs[0].tool, "pen")
-        with self.assertRaises(PromoError):
-            gestures.compile_gestures([{"t": 0.0, "tap": [0.4, 0.4], "tool": "crayon"}], MODEL)
-        with self.assertRaises(PromoError):   # kalemle çizgi = 'pen' jesti; kaydırmaya kalem verilmez
-            gestures.compile_gestures([{"t": 0.0, "scroll": [[0.5, 0.7], [0.5, 0.3]], "tool": "pen"}], MODEL)
-
-    def test_typo_suggests(self):
-        with self.assertRaises(PromoError) as e:
-            gestures.compile_gestures([{"t": 0.0, "scrol": [[0, 0], [1, 1]]}], MODEL)
-        self.assertIn("scroll", str(e.exception))
-        with self.assertRaises(PromoError):
-            gestures.compile_gestures([{"tap": [0.1, 0.1]}], MODEL)  # t yok
-
-
-class TestHand(unittest.TestCase):
-    surf = hand.Surface((0, 0, 1500, 1000))
-
-    def _assign(self, contacts):
-        g = hand.Group(contacts)
-        hand.assign_fingers(g, self.surf, math.radians(-14), 60)
-        return [g.names[id(c)] for c in contacts]
-
-    def test_two_adjacent_is_index_middle(self):
-        cs, *_ = gestures.compile_gestures([{"t": 0, "pointer": [[0.5, 0.7], [0.5, 0.3]]}], MODEL)
-        self.assertEqual(sorted(self._assign(cs)), ["index", "middle"])
-
-    def test_pinch_is_thumb_index(self):
-        cs, *_ = gestures.compile_gestures([{"t": 0, "pinch": [0.5, 0.5], "from": 0.05, "to": 0.25}], MODEL)
-        self.assertEqual(sorted(self._assign(cs)), ["index", "thumb"])
-
-    def test_track_enter_touch_exit(self):
-        c = Contact([1.0, 1.1], [0.5, 0.5], [0.5, 0.5])
-        tr = hand.HandTrack([c], self.surf, 30, 120, hand.HandConfig(fw=60))
-        self.assertIsNone(tr.at(0))                     # henüz görünmüyor
-        p = tr.at(31)                                    # temas anı
-        self.assertIsNotNone(p)
-        self.assertEqual(p.lift, 0.0)
-        self.assertAlmostEqual(p.tips["index"][0], 750, delta=1)
-        self.assertIsNone(tr.at(119))                    # çıkmış
-        # yaklaşırken havada ve büyük
-        q = tr.at(25)
-        self.assertGreater(q.lift, 0.0)
-        self.assertGreater(q.scale, p.scale)
-
-    def test_pen_pose_tip_on_contact(self):
-        c = Contact([1.0, 1.5], [0.4, 0.6], [0.4, 0.5], tool="pen")
-        tr = hand.HandTrack([c], self.surf, 30, 90, hand.HandConfig(fw=60))
-        p = tr.at(36)
-        self.assertEqual(p.pen, 1.0)
-        T = self.surf.to_world(*c.pos(36 / 30))
-        self.assertAlmostEqual(p.tips["pen"][0], T[0], delta=1)
-        self.assertAlmostEqual(p.tips["pen"][1], T[1], delta=1)
-
-    def test_photo_pen_hand_tip_lands_on_contact(self):
-        """Kalem eli FOTOĞRAF (photohand.py). Döndürme formülünün işaret hatası kalem ucunu ekranda
-        yanlış yere koyar → ucu bağımsız ölç: varlıkta uç pikselini boya, aynı hattan döndür, bul."""
-        from promokit import photohand
-        im, meta = photohand._load()
-        base = im.convert("RGBA")
-        tx, ty = meta["tip"]
-        marked = base.copy()
-        marked.paste((255, 0, 255, 255), (int(tx) - 3, int(ty) - 3, int(tx) + 4, int(ty) + 4))
-        saved, cache = photohand._base, dict(photohand._cache)
-        try:
-            photohand._base = (marked.convert("RGBa"), meta)
-            for reach in (-0.5, 0.0, 0.5):
-                photohand._cache.clear()
-                T = (900.0, 600.0)
-                spr, (X, Y), tip = photohand.place(T, 58.0, reach)
-                px = spr.load()
-                best, at = -1, None
-                for y in range(spr.size[1]):
-                    for x in range(max(0, int(tip[0]) - 40), min(spr.size[0], int(tip[0]) + 40)):
-                        r, g, b, a = px[x, y]
-                        v = r + b - 2 * g if a > 200 else -1
-                        if v > best:
-                            best, at = v, (x, y)
-                self.assertLess(math.dist(at, tip), 4.5, f"reach={reach}: boyalı uç {at} ≠ hesaplanan {tip}")
-                self.assertAlmostEqual(X + tip[0], T[0], delta=1)
-                self.assertAlmostEqual(Y + tip[1], T[1], delta=1)
-        finally:
-            photohand._base = saved
-            photohand._cache.clear()
-            photohand._cache.update(cache)
-
-    def test_nail_sits_at_fingertip(self):
-        """Tırnak uç falanksın ÖNÜNDE (kullanıcı: "tırnaklar çok ortalı, uca doğru olmalı")."""
-        w, r_tip = 1.0, 0.43
-        body, _ = hand._nail((0.0, 0.0), (0.0, -1.0), w, r_tip)   # parmak yukarı bakıyor
-        along = [-p[1] for p in body]                              # uç yönündeki izdüşüm
-        self.assertLess(max(along), r_tip)                         # parmak ucunu taşmaz
-        self.assertGreater(max(along), r_tip - 0.12 * w)           # ama uca dayanır
-        self.assertGreater((max(along) + min(along)) / 2, -0.05 * w)   # merkezi uç merkezinin önünde
-
-
-class TestTouchCircles(unittest.TestCase):
-    """Varsayılan: el YOK, dokunulan yerde daire (kullanıcı eli iptal etti, 2026-10-19). Daire temasla
-    belirir, parmağı izler, kalkınca söner; kalem dokunuşunun dairesi parmağınkinden küçüktür."""
-
-    SCREEN = (30, 60, 90)
-
-    def _timeline(self, gestures: str):
-        from promokit.render import Timeline
-        d = tempfile.mkdtemp()
-        Image.new("RGB", (300, 200), self.SCREEN).save(os.path.join(d, "a.png"))
-        p = os.path.join(d, "s.toml")
-        with open(p, "w") as f:
-            f.write(textwrap.dedent(f"""
-                [video]
-                size = 540
-                fps = 30
-                [[scene]]
-                duration = 3
-                tablet = "a.png"
-                gestures = [ {gestures} ]
-            """))
-        st = story.load(p)
-        return st, Timeline(st)
-
-    def _probe(self, tl, t):
-        """Kare + dokunuş noktası (ekranın ortası) çevresinde parlak dairenin yarıçapı."""
-        im = tl.frame(t)
-        rt = tl.rts[0]
-        x, y, w, h = rt.devices["tablet"].rect
-        cx, cy = int(x + 0.5 * w), int(y + 0.5 * h)
-        px = im.load()
-        lum = lambda p: 0.3 * p[0] + 0.59 * p[1] + 0.11 * p[2]
-        base = lum(self.SCREEN)
-        r = 0
-        while cx + r + 1 < im.size[0] and lum(px[cx + r + 1, cy]) > base + 25:
-            r += 1
-        return im, lum(px[cx, cy]) - base, r
-
-    def test_default_is_no_hand(self):
-        self.assertEqual(story.VideoCfg().hand, "none")
-
-    def test_circle_follows_touch_and_fades(self):
-        st, tl = self._timeline('{ t = 1.0, tap = [0.5, 0.5], hold = 0.5 }')
-        try:
-            _, before, _ = self._probe(tl, 0.9)
-            im, during, r = self._probe(tl, 1.3)
-            _, fading, _ = self._probe(tl, 1.62)    # kalkış 1,5 sn; sönme 0,18 sn
-            _, after, _ = self._probe(tl, 2.2)
-        finally:
-            tl.close()
-        self.assertLess(before, 5)          # temas yokken daire yok
-        self.assertGreater(during, 40)      # temas anında: yarı saydam beyaz daire
-        self.assertGreater(r, 6)
-        self.assertLess(fading, 0.5 * during)   # kalkınca birden kaybolmaz, söner
-        self.assertLess(after, 5)           # kalktıktan sonra söndü
-        px = im.get_flattened_data() if hasattr(im, "get_flattened_data") else im.getdata()
-        skin = sum(1 for p in px if p[0] > 190 and 130 < p[1] < 190 and 100 < p[2] < 160)
-        self.assertEqual(skin, 0)           # el çizilmedi
-
-    def _screen_ok(self, im, pts):
-        px = im.load()
-        bad = [(x, y, px[x, y]) for x, y in pts if max(abs(a - b) for a, b in zip(px[x, y], self.SCREEN)) > 6]
-        return bad
-
-    def test_only_circle_no_trail_no_ring(self):
-        """Yalnız daire: kaydırmada iz YOK (iz basamak basamak çiziliyordu — "çentikler"), dokunmada
-        yayılan halka YOK; kısa (0,3 sn) basmada uzun bas halkası da yok."""
-        import math as m
-        st, tl = self._timeline('{ t = 1.0, scroll = [[0.5, 0.78], [0.5, 0.30]], dur = 0.6 }, '
-                                '{ t = 2.0, tap = [0.5, 0.5], hold = 0.3 }')
-        try:
-            t_mid = 1.3
-            im = tl.frame(t_mid)
-            rt = tl.rts[0]
-            x, y, w, h = rt.devices["tablet"].rect
-            r0 = rt.fw * 0.62
-            c = rt.contacts[0]
-            cx, cy = x + c.pos(t_mid)[0] * w, y + c.pos(t_mid)[1] * h
-            # parmağın GELDİĞİ yön (aşağı) boyunca dairenin dışı: ekran rengi kalmalı
-            behind = [(int(cx), int(cy + d)) for d in range(int(1.0 * r0), int(3.5 * r0))]
-            self.assertEqual(self._screen_ok(im, behind), [])
-            im2 = tl.frame(2.2)
-            cx2, cy2 = x + 0.5 * w, y + 0.5 * h
-            ring = [(int(cx2 + rr * m.cos(a)), int(cy2 + rr * m.sin(a)))
-                    for rr in (0.95 * r0, 1.15 * r0, 1.4 * r0, 1.8 * r0, 2.3 * r0)
-                    for a in [k * m.pi / 12 for k in range(24)]]
-            self.assertEqual(self._screen_ok(im2, ring), [])
-        finally:
-            tl.close()
-
-    def test_pen_circle_is_smaller(self):
-        _, tl = self._timeline('{ t = 1.0, tap = [0.5, 0.5], hold = 0.5 }')
-        try:
-            _, _, r_finger = self._probe(tl, 1.3)
-        finally:
-            tl.close()
-        _, tl = self._timeline('{ t = 1.0, tap = [0.5, 0.5], hold = 0.5, tool = "pen" }')
-        try:
-            _, _, r_pen = self._probe(tl, 1.3)
-        finally:
-            tl.close()
-        self.assertGreater(r_pen, 1)
-        self.assertGreater(r_finger, 2 * r_pen)
-
-
-class TestCable(unittest.TestCase):
-    """Kablo: tabletin USB-C yuvası SAĞ kısa kenarda (kullanıcı: "kablo deliği sağ tarafta olur")."""
-
-    def setUp(self):
-        from promokit import cable, devices
-        self.cable, self.devices = cable, devices
-        r = layout.place(1920, 1080, "duo", {"tablet": 1400 / 920, "laptop": 1470 / 956})
-        self.L, self.T = r["laptop"], r["tablet"]
-        self.an = cable.anchors(self.L, self.T)
-
-    def test_port_on_tablet_right_edge(self):
-        tx, ty, tw, th = self.T
-        g = self.devices.geometry("tablet", tw, th)
-        self.assertAlmostEqual(self.an["port"][0], tx + g.right, delta=0.5)
-        self.assertAlmostEqual(self.an["port"][1], ty + th / 2, delta=0.5)
-        self.assertGreater(self.an["port"][0], self.an["mac"][0])   # Mac solda, yuva tabletin uzak yanında
-
-    def test_plug_goes_in_and_out(self):
-        port, th = self.an["port"], self.an["th"]
-        spec = {"t": 0.5, "dur": 0.8}
-        F, phi, vis = self.cable.plug_pose(spec, 0.0, port, th)
-        self.assertGreater(F[0], port[0])                           # önce dışarıda
-        F, phi, vis = self.cable.plug_pose(spec, 1.4, port, th)
-        self.assertLess(F[0], port[0])                              # sonra metal uç gövdenin içinde
-        self.assertAlmostEqual(phi, 0.0)                            # yuvaya yatay girer
-        out = {"t": 0.5, "dur": 0.5, "out": True}
-        self.assertEqual(self.cable.plug_pose(out, 0.4, port, th)[2], 1.0)
-        self.assertLess(self.cable.plug_pose(out, 0.4, port, th)[0][0], port[0])
-        self.assertEqual(self.cable.plug_pose(out, 2.0, port, th)[2], 0.0)   # çıkarıldı → söndü
-
-    def test_cable_hidden_behind_tablet(self):
-        """Kablo tabletin ARKASINDAN geçer: kablolu ve kablosuz karede tablet gövdesinin İÇİ
-        piksel piksel aynı olmalı (kaynak metnine bakmak yetmez — davranışı ölç)."""
-        from promokit.render import Timeline
-        d = tempfile.mkdtemp()
-        Image.new("RGB", (300, 200), (30, 60, 90)).save(os.path.join(d, "a.png"))
-        frames = []
-        for cable in ("", "cable = { t = 0.1, dur = 0.3 }"):
-            path = os.path.join(d, f"s{len(frames)}.toml")
-            with open(path, "w") as f:
-                f.write(textwrap.dedent(f"""
-                    [video]
-                    size = 540
-                    fps = 30
-                    [[scene]]
-                    layout = "duo"
-                    duration = 2
-                    tablet = "a.png"
-                    laptop = "a.png"
-                    {cable}
-                """))
-            st = story.load(path)
-            tl = Timeline(st)
-            try:
-                frames.append((tl.frame(1.5), tl.rts[0].stage_rects(tl.rts[0].camera.at(1.5), 1.5)))
-            finally:
-                tl.close()
-        (a, rects), (b, _) = frames
-        tx, ty, tw, th = rects["tablet"]
-        from PIL import ImageChops
-        inner = (int(tx + 4), int(ty + 4), int(tx + tw - 4), int(ty + th + th * 0.04))  # ekran + alt çerçeve
-        self.assertIsNone(ImageChops.difference(a.crop(inner), b.crop(inner)).getbbox())
-        # ...ama kablo gerçekten çizildi: tabletin sağında (fiş + sarkan kısım) fark var
-        right = (int(tx + tw + th * 0.06), int(ty + th * 0.4), int(min(a.size[0], tx + tw + th * 0.3)), int(ty + th))
-        self.assertIsNotNone(ImageChops.difference(a.crop(right), b.crop(right)).getbbox())
 
 
 class TestStory(unittest.TestCase):
@@ -430,7 +117,6 @@ class TestLayoutAndRender(unittest.TestCase):
                 [video]
                 size = 360
                 fps = 30
-                hand = "skin"
                 [[scene]]
                 layout = "duo"
                 duration = 2
@@ -441,7 +127,6 @@ class TestLayoutAndRender(unittest.TestCase):
                 duration = 2
                 caption = "İki"
                 tablet = "a.png"
-                gestures = [ { t = 0.6, tap = [0.5, 0.5] } ]
             """))
         st = story.load(p)
         tl = Timeline(st)
@@ -449,11 +134,6 @@ class TestLayoutAndRender(unittest.TestCase):
             for t in (0.2, 1.7, 2.6, 3.9):  # 1.7 = morph geçişinin ortası
                 im = tl.frame(t)
                 self.assertEqual(im.size, (640, 360))
-            # dokunuş anında elin derisi kadrajda olmalı (ten rengi piksel var)
-            im = tl.frame(st.scenes[1].start + 0.65)
-            px = im.get_flattened_data() if hasattr(im, "get_flattened_data") else im.getdata()
-            skin = sum(1 for r, g, b in px if r > 190 and 130 < g < 190 and 100 < b < 160)
-            self.assertGreater(skin, 50)
         finally:
             tl.close()
 
@@ -523,13 +203,17 @@ class TestValidation(unittest.TestCase):
     BASE = 'duration = 2\ntablet = "a.png"'
     DUO = 'duration = 2\nlayout = "duo"\ntablet = "a.png"\nlaptop = "b.png"'
     CASES = [  # (ad, [video] ekleri, sahne gövdesi)
-        ("kablo anahtarı", "", DUO + '\ncable = { t = 0.5, durr = 1 }'),
-        ("kablo değeri", "", DUO + '\ncable = { t = "erken" }'),
-        ("kablo out", "", DUO + '\ncable = { t = 0.5, out = "evet" }'),
-        ("wifi anahtarı", "", DUO + '\nwifi = { t = 1, len = 2 }'),
-        ("wifi süresi", "", DUO + '\nwifi = { t = 1, dur = -1 }'),
-        ("ses anahtarı", "", BASE + '\nsound = { t = 1, d = 2 }'),
-        ("ses değeri", "", BASE + '\nsound = { t = "x" }'),
+        ("scroll anahtarı", "", 'duration = 2\ntablet = { src = "a.png", scroll = [ { t = 0, yy = 10 } ] }'),
+        ("scroll y de to da", "", 'duration = 2\ntablet = { src = "a.png", scroll = [ { t = 0, y = 10, to = "#a" } ] }'),
+        ("scroll y da to da yok", "", 'duration = 2\ntablet = { src = "a.png", scroll = [ { t = 0 } ] }'),
+        ("scroll y değeri", "", 'duration = 2\ntablet = { src = "a.png", scroll = [ { t = 0, y = -5 } ] }'),
+        ("scroll süresi", "", 'duration = 2\ntablet = { src = "a.png", scroll = [ { t = 0, y = 5, dur = -1 } ] }'),
+        ("scroll yumuşatma", "", 'duration = 2\ntablet = { src = "a.png", scroll = [ { t = 0, y = 5, ease = "inoutt" } ] }'),
+        ("scroll to biçimi", "", 'duration = 2\ntablet = { src = "a.png", scroll = [ { t = 0, to = 5 } ] }'),
+        ("scroll çakışması", "", 'duration = 3\ntablet = { src = "a.png", scroll = [ { t = 0, y = 5, dur = 2 }, { t = 1, y = 9 } ] }'),
+        ("scroll cihaz sahnesinde", "", BASE + '\nscroll = [ { t = 0, y = 5 } ]'),
+        ("jest artık yok", "", BASE + '\ngestures = [ { t = 0.6, tap = [0.5, 0.5] } ]'),
+        ("kablo artık yok", "", DUO + '\ncable = { t = 0.5 }'),
         ("anim anahtarı", "", BASE + '\nanim = { tablet = [ { t = 0, z = 1 } ] }'),
         ("anim cihazı", "", BASE + '\nanim = { phone = [ { t = 0, x = 1 } ] }'),
         ("anim yumuşatma", "", BASE + '\nanim = { tablet = [ { t = 0, x = 0 }, { t = 1, x = 1, ease = "inoutt" } ] }'),
@@ -550,7 +234,6 @@ class TestValidation(unittest.TestCase):
         ("html sayfasız", "", 'type = "html"\nduration = 2'),
         ("html sayfa yok", "", 'type = "html"\nduration = 2\npage = "yok.html"'),
         ("süre", "", 'duration = 0\ntablet = "a.png"'),
-        ("keys_at", "", BASE + '\nkeys_at = [0.5]'),
         ("still değeri", "", BASE + '\nstill = "son"'),
         ("still eksi", "", BASE + '\nstill = -0.5'),
         ("still sahneden uzun", "", BASE + '\nstill = 2.5'),
@@ -609,8 +292,8 @@ class TestValidation(unittest.TestCase):
 
 
 class TestMorphContinuity(unittest.TestCase):
-    """Geçiş, sahnelerin cihazlarını NORMAL karelerle AYNI yoldan çizer: anim durumu, Wi-Fi ve ekran
-    durumu geçişin ilk/son karesinde zıplamaz (bulgu 1)."""
+    """Geçiş, sahnelerin cihazlarını NORMAL karelerle AYNI yoldan çizer: anim ve ekran durumu geçişin
+    ilk/son karesinde zıplamaz (bulgu 1)."""
 
     def test_no_pop_at_morph_start(self):
         p = _mk("""
@@ -623,7 +306,6 @@ class TestMorphContinuity(unittest.TestCase):
             duration = 3
             tablet = "a.png"
             laptop = "b.png"
-            wifi = { t = 0.2, dur = 10 }
             anim = { tablet = [ { t = 0.5, x = 0.0, s = 1.0 }, { t = 1.5, x = 0.3, y = -0.1, s = 0.85 } ] }
             [[scene]]
             duration = 3
@@ -635,8 +317,6 @@ class TestMorphContinuity(unittest.TestCase):
         b0, b1 = _mask(before, SCREEN).getbbox(), _mask(at, SCREEN).getbbox()
         for a, b in zip(b0, b1):
             self.assertLess(abs(a - b), 4, f"tablet tek karede zıpladı: {b0} → {b1}")
-        self.assertGreater(_blue(at), 0.5 * _blue(before))   # Wi-Fi simgesi birden kaybolmaz
-        self.assertGreater(_blue(before), 30)
 
     def test_no_pop_when_zoomed_scene_morphs(self):
         """Bant kuralı geçişte de: yakınlaşıp aşağı kaydırılmış sahneden geçişin ilk karesi aynı yerden
@@ -684,26 +364,6 @@ class TestMorphContinuity(unittest.TestCase):
         mid = (st.video.width / 2 - 4, st.video.height / 2 - 4, st.video.width / 2 + 4, st.video.height / 2 + 4)
         self.assertLess(abs(_lum(last_morph, mid) - _lum(first_b, mid)), 8)
 
-    def test_touch_circle_follows_animated_tablet(self):
-        p = _mk("""
-            [video]
-            size = 540
-            fps = 30
-            [[scene]]
-            duration = 2
-            tablet = "a.png"
-            anim = { tablet = [ { t = 0, x = 0.4, s = 0.6 } ] }
-            gestures = [ { t = 0.5, tap = [0.5, 0.5], hold = 0.5 } ]
-        """)
-        _, _, (im,) = _frames(p, [0.7])
-        sx0, sy0, sx1, sy1 = _mask(im, SCREEN).getbbox()
-        dot = im.convert("L").crop((sx0, sy0, sx1, sy1)).point(lambda v: 255 if v > 110 else 0).getbbox()
-        self.assertIsNotNone(dot, "dokunuş dairesi tabletin üstünde değil")
-        dcx, dcy = sx0 + (dot[0] + dot[2]) / 2, sy0 + (dot[1] + dot[3]) / 2
-        self.assertLess(abs(dcx - (sx0 + sx1) / 2), 4)
-        self.assertLess(abs(dcy - (sy0 + sy1) / 2), 4)
-
-
 class TestRotate(unittest.TestCase):
     """F1: `rot` (derece, + = saat yönü) + `s = "fit"` — cihaz merkezinde döner, içerik kutusuna sığar."""
 
@@ -748,17 +408,6 @@ class TestRotate(unittest.TestCase):
                 finally:
                     tl.close()
 
-    def test_touch_maps_through_rotation(self):
-        # rot = -90 (saat yönünün tersi): ekranın SAĞ yanındaki dokunuş ÜST yarıya düşer
-        p = self._story('{ t = 0, rot = -90 }', 'gestures = [ { t = 0.5, tap = [0.8, 0.5], hold = 0.5 } ]')
-        _, _, (im,) = _frames(p, [0.7])
-        sx0, sy0, sx1, sy1 = _mask(im, SCREEN).getbbox()
-        dot = im.convert("L").crop((sx0, sy0, sx1, sy1)).point(lambda v: 255 if v > 110 else 0).getbbox()
-        self.assertIsNotNone(dot)
-        dcx, dcy = sx0 + (dot[0] + dot[2]) / 2, sy0 + (dot[1] + dot[3]) / 2
-        self.assertLess(abs(dcx - (sx0 + sx1) / 2), 4)
-        self.assertLess(dcy, sy0 + 0.3 * (sy1 - sy0))
-
     def test_rotated_shadow_falls_down(self):
         p = self._story('{ t = 0, rot = -90 }')
         _, _, (im,) = _frames(p, [1.0])
@@ -776,118 +425,6 @@ class TestRotate(unittest.TestCase):
     def test_rotation_keys_validated(self):
         p = self._story('{ t = 0, rot = -90, s = "fit", x = 0.1 }')
         story.load(p)   # geçerli
-
-
-class TestSound(unittest.TestCase):
-    """F2: `sound = { t, dur }` — tabletin kısa kenarlarının dışında ses dalgaları (cihazla döner)."""
-
-    def _bands(self, im, vertical=False):
-        x0, y0, x1, y1 = _mask(im, SCREEN).getbbox()
-        w, h = x1 - x0, y1 - y0
-        m = 0.06 * min(w, h)
-        if not vertical:
-            a = (x0 - m - 0.45 * h, y0 + 0.2 * h, x0 - m, y1 - 0.2 * h)
-            b = (x1 + m, y0 + 0.2 * h, x1 + m + 0.45 * h, y1 - 0.2 * h)
-        else:
-            a = (x0 + 0.2 * w, y0 - m - 0.45 * w, x1 - 0.2 * w, y0 - m)
-            b = (x0 + 0.2 * w, y1 + m, x1 - 0.2 * w, y1 + m + 0.45 * w)
-        return a, b, (x0, y0, x1, y1)
-
-    def test_waves_outside_short_sides(self):
-        for aspect, lay_ in (("16:9", "tablet"), ("9:16", "duo"), ("16:9", "duo")):
-            with self.subTest(aspect=aspect, layout=lay_):
-                lap = 'laptop = "b.png"\n' if lay_ == "duo" else ""
-                p = _mk(f'[video]\nsize = 540\nfps = 30\n[[scene]]\nduration = 3\nlayout = "{lay_}"\n'
-                        f'tablet = "a.png"\n{lap}sound = {{ t = 0.3, dur = 5 }}\n')
-                _, _, (pre, on) = _frames(p, [0.1, 1.2], aspect)
-                a, b, scr = self._bands(on)
-                self.assertGreater(_blue(on, a), 15)
-                self.assertGreater(_blue(on, b), 15)
-                self.assertEqual(_blue(pre, a) + _blue(pre, b), 0)     # başlamadan yok
-                self.assertEqual(_blue(on, scr), 0)                     # ekranın üstüne çizilmez
-
-    def test_waves_fit_in_portrait_frame(self):
-        """Dikey kadrajda tek tablet kutuyu enine doldurur: ses sahnesinde kısa kenarlara pay ayrılır,
-        dalgalar kadraj kenarında kırpılmaz."""
-        p = _mk('[video]\nsize = 540\nfps = 30\n[[scene]]\nduration = 3\ntablet = "a.png"\nsound = { t = 0.3, dur = 5 }\n')
-        _, _, (im,) = _frames(p, [1.2], "9:16")
-        W = im.size[0]
-        self.assertGreater(_blue(im), 60)
-        self.assertEqual(_blue(im, (0, 0, 3, im.size[1])) + _blue(im, (W - 3, 0, W, im.size[1])), 0)
-
-    def test_waves_rotate_with_device(self):
-        p = _mk('[video]\nsize = 540\nfps = 30\n[[scene]]\nduration = 3\ntablet = "a.png"\n'
-                'anim = { tablet = [ { t = 0, rot = 90, s = "fit" } ] }\nsound = { t = 0.3, dur = 5 }\n')
-        _, _, (im,) = _frames(p, [1.2])
-        a, b, _ = self._bands(im, vertical=True)
-        self.assertGreater(_blue(im, a), 15)
-        self.assertGreater(_blue(im, b), 15)
-
-
-class TestPortraitGeometry(unittest.TestCase):
-    """Bulgu 3: Wi-Fi ve kablo dikey (üst üste) yerleşimde de doğru yerde."""
-
-    def _duo(self, extra, aspect, t):
-        p = _mk(f'[video]\nsize = 540\nfps = 30\n[[scene]]\nduration = 3\nlayout = "duo"\n'
-                f'tablet = "a.png"\nlaptop = "b.png"\n{extra}\n')
-        return _frames(p, [t], aspect)
-
-    def test_wifi_between_devices(self):
-        for aspect in ("9:16", "4:5", "16:9"):
-            with self.subTest(aspect):
-                st, _, (im,) = self._duo('wifi = { t = 0.1, dur = 5 }', aspect, 1.5)
-                L = _mask(im, LAPTOP_SCREEN).getbbox()
-                T = _mask(im, SCREEN).getbbox()
-                blue = _mask(im, (79, 124, 255), tol=70).getbbox()
-                self.assertIsNotNone(blue)
-                if aspect == "16:9":
-                    self.assertGreater(blue[0], L[2])
-                    self.assertLess(blue[2], T[0])
-                else:
-                    self.assertGreater(blue[1], L[3])
-                    self.assertLess(blue[3], T[1])
-
-    def test_cable_stays_in_frame_when_stacked(self):
-        """Üst üste yerleşimde kablo Mac'in sağından iner: kadrajın sağ kenarına DEĞMEZ (pay ayrılır),
-        ama gerçekten çizilir (tabletin sağında koyu kablo/fiş)."""
-        for aspect in ("9:16", "4:5"):
-            with self.subTest(aspect):
-                _, _, (im,) = self._duo('cable = { t = 0.1, dur = 0.3 }', aspect, 1.5)
-                W, H = im.size
-                g = im.convert("L")
-                dark_cols = [x for x in range(W) if min(g.crop((x, 0, x + 1, H)).tobytes()) < 90]
-                T = _mask(im, SCREEN).getbbox()
-                self.assertGreater(max(dark_cols), T[2] + 0.06 * (T[3] - T[1]))   # tabletin sağında kablo var
-                self.assertLess(max(dark_cols), W - 0.03 * W)                        # kenara değmez
-                # …ve iki cihazın ARASINDAN (tabletin önünden çaprazlama) geçmez: yandan iner
-                L = _mask(im, LAPTOP_SCREEN).getbbox()
-                gap = (T[0], int(L[3] + 0.1 * (L[2] - L[0])), T[2], int(T[1] - 0.08 * (T[3] - T[1])))
-                self.assertGreater(gap[3] - gap[1], 2)
-                self.assertGreater(min(g.crop(gap).tobytes()), 90)
-
-    def test_stacked_cable_route_never_goes_behind_tablet(self):
-        """Üst üste yerleşimde kablonun ekseni tabletin SAĞINDA kalır (yan yana rotası gibi tabletin
-        arkasına dalıp masaya inmez — dikeyde masa yok, kablo çapraz görünüyordu)."""
-        from promokit import cable
-        from promokit.render import Timeline
-        p = _mk('[video]\nsize = 540\nfps = 30\n[[scene]]\nduration = 3\nlayout = "duo"\n'
-                'tablet = "a.png"\nlaptop = "b.png"\ncable = { t = 0.1, dur = 0.3 }\n')
-        for aspect in ("9:16", "4:5"):
-            with self.subTest(aspect):
-                st = story.load(p, aspect=aspect)
-                tl = Timeline(st)
-                try:
-                    rt = tl._rt(st.scenes[0])
-                    poses = rt.poses(rt.camera.at(1.5), 1.5)
-                finally:
-                    tl.close()
-                an = cable.anchors(poses["laptop"], poses["tablet"], (st.video.width, st.video.height))
-                self.assertTrue(an["stacked"])
-                for t in (0.0, 0.3, 1.5):
-                    F, phi, _ = cable.plug_pose(st.scenes[0].cable, t, an["port"], an["th"], an["rot"])
-                    pts = cable.cable_path(an, F, phi)
-                    right = poses["tablet"].body_bbox()[2]
-                    self.assertGreaterEqual(min(x for x, _ in pts), right - 1)
 
 
 class TestCaptionLayout(unittest.TestCase):
@@ -1027,8 +564,8 @@ camera = [ {{ t = 1.2, zoom = 1.3, at = [0.5, 0.5], on = "tablet", dur = 0.6 }} 
                 self.assertIsNotNone(ImageChops.difference(ims[0].crop(band), ims[1].crop(band)).getbbox())
                 self.assertIsNone(ImageChops.difference(ims[0].crop(rest), ims[1].crop(rest)).getbbox())
         # kart (outro): başlık ve rozet GERÇEKTEN çizilir
-        variants = {"boş": "", "başlık": 'title = "Tabletiniz zaten hazır."',
-                    "rozet": 'title = "Tabletiniz zaten hazır."\nbadge = "Apple Silicon Mac"'}
+        variants = {"boş": "", "başlık": 'title = "Hazır."',
+                    "rozet": 'title = "Hazır."\nbadge = "Yeni sürüm"'}
         ims = {}
         for k, extra in variants.items():
             p = _mk(f'[video]\nsize = 540\nfps = 30\n[[scene]]\ntype = "outro"\nduration = 3\n{extra}\n')
@@ -1094,62 +631,6 @@ class TestFullStagePage(unittest.TestCase):
         bx0, by0, bx1, by1 = tl.box
         for got, want in zip(params["content"], (bx0 / k, by0 / k, (bx1 - bx0) / k, (by1 - by0) / k)):
             self.assertAlmostEqual(got, want, places=3)
-
-
-class TestHtmlPageTime(unittest.TestCase):
-    """2b: sayfa `in + t·hız` anında oynatılır → jestler ve seçici çözümü de AYNI sayfa zamanında."""
-
-    def _rt(self, tablet, gestures, latency=0.0):
-        from promokit.render import Timeline
-        p = _mk(f'[video]\nsize = 360\nfps = 30\nlatency = {latency}\n[[scene]]\nduration = 4\n'
-                f'tablet = {tablet}\ngestures = [ {gestures} ]\n')
-        st = story.load(p)
-        tl = Timeline(st)
-        return tl, tl._rt(st.scenes[0])
-
-    def test_latency_applied(self):
-        tl, rt = self._rt('"p.html"', '{ t = 2.0, tap = [0.5, 0.5] }', latency=0.05)
-        try:
-            self.assertAlmostEqual(rt.contacts[0].t0, 2.0)
-            self.assertAlmostEqual(rt.devices["tablet"].timeline["gestures"][0]["t0"], 2.05, places=6)
-        finally:
-            tl.close()
-
-    def test_page_gestures_follow_in_and_speed(self):
-        tl, rt = self._rt('{ src = "p.html", in = 1.0, speed = 2.0 }', '{ t = 2.0, tap = [0.5, 0.5] }', latency=0.05)
-        try:
-            self.assertAlmostEqual(rt.contacts[0].t0, 2.0)                        # daire: sahne zamanı
-            g = rt.devices["tablet"].timeline["gestures"][0]
-            self.assertAlmostEqual(g["t0"], 1.0 + (2.0 + 0.05) * 2.0, places=6)    # sayfa: in + (t+gecikme)·hız
-        finally:
-            tl.close()
-
-    def test_selector_resolved_at_page_time(self):
-        import promokit.htmlscreen as hs
-        calls = []
-
-        class Fake:
-            def __init__(self, *a, **k):
-                pass
-
-            def __call__(self, sel, t, contacts, keys, texts, **kw):
-                calls.append((sel, t, [c.t0 for c in contacts]))
-                return (0.4, 0.4, 0.2, 0.2)
-
-            def close(self):
-                pass
-        saved = hs.SelectorResolver
-        hs.SelectorResolver = Fake
-        try:
-            tl, rt = self._rt('{ src = "p.html", in = 1.0 }', '{ t = 0.5, tap = [0.2, 0.2] }, { t = 2.0, tap = "#x" }')
-            tl.close()
-        finally:
-            hs.SelectorResolver = saved
-        sel, t, prior = calls[0]
-        self.assertEqual(sel, "#x")
-        self.assertAlmostEqual(t, 3.0)              # sahne 2,0 s → sayfa 1,0 + 2,0
-        self.assertAlmostEqual(prior[0], 1.5)       # önceki dokunuş da sayfa zamanında
-        self.assertAlmostEqual(rt.contacts[1].t0, 2.0)
 
 
 class TestLaptopLid(unittest.TestCase):
@@ -1393,21 +874,10 @@ class TestEncodeAndMedia(unittest.TestCase):
 class TestDeterminismAndText(unittest.TestCase):
     """Bulgu 11-12: dokunuş dairesi önbelleği sıra-bağımsız · harf aralıklı başlık ortalı ve kırpılmaz."""
 
-    def test_dot_sprite_independent_of_cache_order(self):
-        from promokit import overlays as ov
-        ov._DOTS.clear()
-        ov._dot(10.26, 1.0)
-        a = ov._dot(10.74, 1.0).copy()
-        ov._DOTS.clear()
-        b = ov._dot(10.74, 1.0).copy()
-        ov._DOTS.clear()
-        self.assertEqual(a.size, b.size)
-        self.assertEqual(a.tobytes(), b.tobytes())
-
     def test_tracked_text_centered_and_unclipped(self):
         from promokit.text import Fonts, render_text
         f = Fonts()
-        for txt in ("AVAWAYATAVATTA Yo Te", "Tabletiniz zaten hazır.", "Kabloyu takın. Mac'inizin ikinci ekranı."):
+        for txt in ("AVAWAYATAVATTA Yo Te", "Hazır.", "Kabloyu takın. Mac'inizin ikinci ekranı."):
             with self.subTest(txt):
                 im = render_text(f, txt, 56, 700, "#000000", tracking=-0.02)
                 x0, _, x1, _ = im.getchannel("A").getbbox()
@@ -1537,7 +1007,7 @@ class TestPlatformSafeArea(unittest.TestCase):
         from promokit.overlays import Caption
         from promokit.text import Fonts
         f = Fonts()
-        tall, wide = Caption(f, 1080, 1920, "Plug in the cable.", "No developer mode"), Caption(f, 1920, 1080, "Plug in the cable.", "No developer mode")
+        tall, wide = Caption(f, 1080, 1920, "Welcome to the tour.", "No sign-up needed"), Caption(f, 1920, 1080, "Welcome to the tour.", "No sign-up needed")
         self.assertGreaterEqual(tall.sub.size[1] / wide.sub.size[1], 1.4)
         self.assertGreaterEqual(tall.title.size[1] / wide.title.size[1], 1.1)
         self.assertGreater(Caption.band(1080, 1920), Caption.band(1920, 1080))
@@ -1550,7 +1020,7 @@ class TestPlatformSafeArea(unittest.TestCase):
         from promokit.render import Timeline
         body = ('[[scene]]\ntype = "outro"\nduration = 3\ntitle = "Free during the open beta."\n'
                 'subtitle = "Mac app: example.com/mac · Tablet app: Google Play / AppGallery"\n'
-                'badge = "Apple Silicon Mac · Android tablet"\n')
+                'badge = "Yeni sürüm · Android tablet"\n')
         cards = {}
         for aspect in ("9:16", "16:9"):
             st = story.load(_mk(f'[video]\naspect = "{aspect}"\nsize = 1080\nfps = 30\n{body}'))
@@ -1696,8 +1166,6 @@ class TestShippedExamples(unittest.TestCase):
         for name in names:
             for aspect in ("16:9", "9:16"):
                 st = story.load(os.path.join(stories_dir, name), aspect=aspect)
-                for sc in st.scenes:
-                    sc.gestures = []          # duruş jestlerden bağımsız; seçici çözümü (tarayıcı) gerekmesin
                 tl = Timeline(st)
                 try:
                     for sc in st.scenes:

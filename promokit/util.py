@@ -114,56 +114,6 @@ def rot(p, ang: float):
     return (p[0] * c - p[1] * s, p[0] * s + p[1] * c)
 
 
-def catmull_rom(points, samples: int = 8, closed: bool = False):
-    """Noktalardan geçen yumuşak eğri (centripetal değil, uniform — kısa yollar için yeterli)."""
-    pts = list(points)
-    n = len(pts)
-    if n < 3:
-        return pts
-    out = []
-    rng = range(n) if closed else range(n - 1)
-    for i in rng:
-        p0 = pts[(i - 1) % n] if closed or i > 0 else pts[0]
-        p1 = pts[i]
-        p2 = pts[(i + 1) % n]
-        p3 = pts[(i + 2) % n] if closed or i + 2 < n else pts[-1]
-        for k in range(samples):
-            t = k / samples
-            t2, t3 = t * t, t * t * t
-            x = 0.5 * ((2 * p1[0]) + (-p0[0] + p2[0]) * t
-                       + (2 * p0[0] - 5 * p1[0] + 4 * p2[0] - p3[0]) * t2
-                       + (-p0[0] + 3 * p1[0] - 3 * p2[0] + p3[0]) * t3)
-            y = 0.5 * ((2 * p1[1]) + (-p0[1] + p2[1]) * t
-                       + (2 * p0[1] - 5 * p1[1] + 4 * p2[1] - p3[1]) * t2
-                       + (-p0[1] + 3 * p1[1] - 3 * p2[1] + p3[1]) * t3)
-            out.append((x, y))
-    if not closed:
-        out.append(pts[-1])
-    return out
-
-
-def polyline_length(pts) -> float:
-    return sum(dist(pts[i], pts[i + 1]) for i in range(len(pts) - 1))
-
-
-def point_along(pts, s: float):
-    """Polyline üzerinde 0..1 yay-uzunluğu oranındaki nokta."""
-    if len(pts) == 1:
-        return pts[0]
-    total = polyline_length(pts)
-    if total <= 1e-9:
-        return pts[0]
-    target = clamp(s) * total
-    acc = 0.0
-    for i in range(len(pts) - 1):
-        seg = dist(pts[i], pts[i + 1])
-        if acc + seg >= target:
-            k = (target - acc) / seg if seg > 0 else 0
-            return lerp2(pts[i], pts[i + 1], k)
-        acc += seg
-    return pts[-1]
-
-
 def smooth_series(values, alpha: float):
     """Sıfır-fazlı (ileri+geri) üstel yumuşatma — gecikmesiz. values: float listesi."""
     if not values:
@@ -206,14 +156,6 @@ def ffprobe_bin() -> str:
     if not p:
         die("ffprobe bulunamadı (brew install ffmpeg)")
     return p
-
-
-def adb_bin() -> str | None:
-    # macOS'ta adb çoğu kurulumda PATH'te DEĞİLDİR (Android Studio SDK'sı); `ADB` ortam değişkeni de kabul edilir.
-    return find_tool("adb", [
-        "~/Library/Android/sdk/platform-tools/adb",
-        "~/AppData/Local/Android/Sdk/platform-tools/adb.exe",
-    ])
 
 
 class PromoError(Exception):

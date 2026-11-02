@@ -18,7 +18,7 @@ from dataclasses import dataclass
 
 from PIL import Image, ImageChops, ImageDraw, ImageFilter
 
-from .util import mix, parse_color, rgb
+from .util import mix, rgb
 
 SS = 2  # süper-örnek katsayısı
 
@@ -375,15 +375,6 @@ def lid_marks(sw: float, options: dict | None = None) -> dict:
     L = laptop_spec(options)
     return {"lid_right": sw * (1 + L["side"]),
             "base_top_below_screen": sw * (L["chin"] + L["hinge"] * 0.55)}
-
-
-def laptop_port(sw: float, sh: float, options: dict | None = None) -> tuple[float, float]:
-    """Dizüstünün USB-C yuvası (ekran sol-üstüne göre px): alt gövdenin SAĞ yüzü, ön yüzün yükseklik ortası —
-    MODELİN geometrisinden (taban yüksekliği, çene, menteşe). Kablo (`cable.anchors`) fişi buraya takar;
-    modele göre sabit bir nokta yazmak gövde değişince fişi havada bırakırdı."""
-    g = geometry("laptop", sw, sh, options)
-    base_t = sh + lid_marks(sw, options)["base_top_below_screen"]
-    return g.right, (base_t + g.bottom) / 2
 
 
 def _winbook(sw: int, sh: int, o: dict) -> Chrome:

@@ -62,7 +62,6 @@ LANGS = ("tr", "en", "zh")              # seslendirme dili (kullanıcı, 2026-10
 # İngilizce kelimelerin Türkçe yazımla okunuşu — YALNIZ Türkçe seslendirmede (`lang = "tr"`);
 # senaryonun `[voice] lexicon`u ezer/ekler (o, her dilde uygulanır)
 DEFAULT_LEXICON = {
-    "Mission Control": "Mişın Kontrol",
     "MacBook": "Mekbuk",
     "Wi-Fi": "vayfay",
     "Mac": "Mek",

@@ -5,7 +5,7 @@
 #
 # ⛔ NEDEN çıplak `python3 -m unittest` DEĞİL: HTML ekran testleri başsız bir Chromium tarayıcısı
 # (Chrome/Brave/Chromium) ister; bulunamazsa testler ATLANIR ve unittest yine "OK (skipped=N)" deyip
-# exit 0 verir → tarayıcısız bir makinede (CI dahil) jest/şablon kilitleri hiç koşmadan "yeşil" görünür.
+# exit 0 verir → tarayıcısız bir makinede (CI dahil) sayfa oynatıcı kilitleri hiç koşmadan "yeşil" görünür.
 # Bu betik atlamayı HATA sayar.
 #
 # macOS notu: Chromium her açılışta /var/folders/…/X/<kimlik>.code_sign_clone/ altına ~1.400 dosyalık klon

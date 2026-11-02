@@ -2,19 +2,17 @@
 
 Paralel render: zaman çizelgesi N parçaya bölünür, her süreç kendi parçasını kendi
 ffmpeg'iyle kodlar, sonra parçalar kayıpsız birleştirilir (concat, `-c copy`). Her
-şey zamanın SAF fonksiyonu (el pozları önceden hesaplanır, video okuyucu klip başından
+şey zamanın SAF fonksiyonu (HTML sayfalar kare ızgarasında oynar, video okuyucu klip başından
 sırayla okur) — parça sınırında dikiş oluşmaz.
 
 Bir kare TEK yoldan çizilir (`_compose`): tek sahnenin karesi de iki sahne arası geçiş (morph)
-karesi de cihazları `DevicePose` (kamera + anim durumunun tamamı) ile, kabloyu/Wi-Fi'ı/sesi ve
-dokunuşları aynı fonksiyonlarla çizer. Geçişte ortak cihazın duruşu (dikdörtgen + TÜM anim
-alanları) ara değerlenir — yeni bir anim alanı geçişe kendiliğinden akar.
+karesi de cihazları `DevicePose` (kamera + anim durumunun tamamı) ile çizer. Geçişte ortak
+cihazın duruşu (dikdörtgen + TÜM anim alanları) ara değerlenir — yeni bir anim alanı geçişe
+kendiliğinden akar.
 """
 from __future__ import annotations
 
-import copy
 import math
-from dataclasses import replace
 import multiprocessing as mp
 import os
 import shutil
@@ -27,22 +25,17 @@ from PIL import Image, ImageChops, ImageDraw
 
 from . import devices as dev
 from . import layout as lay
-from .gestures import HandModel, compile_gestures
-from .hand import STYLES, Camera, HandConfig, HandTrack, Surface, draw_hand
-from .layout import ANIM_DEFAULT, DevicePose, anim_state  # noqa: F401  (ANIM_DEFAULT/anim_state dışa açık)
+from .layout import ANIM_DEFAULT, Camera, DevicePose, anim_state  # noqa: F401  (ANIM_DEFAULT/anim_state dışa açık)
 from .media import Probe, SolidSource, StillSource, VideoSource, cover_crop
-from .overlays import THEMES, Caption, KeyChips, background, draw_touch_fx, paste_rgba, render_text
+from .overlays import THEMES, Caption, background, paste_rgba, render_text
 from .story import Scene, Story, load
 from .text import Fonts
-from .touches import TouchLog
 from .util import PromoError, clamp, ease, ffmpeg_bin, fmt_time, log, mix, rgb
-
-HAND_FW = 0.045  # parmak genişliği / tablet ekran köşegeni (hand_scale=1; gerçek el ≈0.058)
 
 
 class DeviceRT:
     """Bir cihazın ekran içeriği. Kaynak TEMBEL kurulur: HTML ekranın tarayıcısı ancak sahne
-    gerçekten çizilince açılır (ve sayfanın jest zaman çizelgesi o ana kadar verilmiş olur)."""
+    gerçekten çizilince açılır."""
 
     def __init__(self, kind: str, rect, ref, fps: float, max_zoom: float, opts: dict):
         self.kind = kind
@@ -50,7 +43,6 @@ class DeviceRT:
         self.ref = ref
         self.opts = opts
         self.fps = fps
-        self.timeline = None
         self._source = None
         self.html = False
         self.probe = None
@@ -83,8 +75,7 @@ class DeviceRT:
             elif self.html:
                 from .htmlscreen import HtmlSource
                 pr = self.probe
-                tl = dict(self.timeline or {"fps": self.fps, "gestures": [], "keys": [], "texts": []})
-                tl["params"] = ref.params
+                tl = {"fps": self.fps, "params": ref.params, "scroll": {"target": ref.scroller, "moves": ref.scroll}}
                 self._source = HtmlSource(ref.path, (pr.width, pr.height), self.size, self.fps, tl)
             elif self.probe.kind == "image":
                 self._source = StillSource(ref.path, self.crop, self.size)
@@ -106,38 +97,6 @@ class DeviceRT:
         if self._source is not None:
             self._source.close()
             self._source = None
-
-
-# ── HTML sayfa zamanı ─────────────────────────────────────────────────────────
-# Sayfa `in + t·hız` anında oynatılır (DeviceRT içeriği gibi) → sayfanın jestleri ve seçici çözümü de
-# AYNI sayfa zamanında olmalı; daireler sahne zamanında kalır. Önceden jestler sahne zamanındaydı:
-# `in = 1` ile t=2'deki dokunuş sayfada 1 sn ERKEN işliyordu.
-def _page_contacts(cs, t_in: float, sp: float):
-    # dataclasses.replace: temasın diğer alanları (araç, yüzey, yerel…) olduğu gibi taşınır
-    return [replace(c, t=[t_in + tt * sp for tt in c.t], x=list(c.x), y=list(c.y), p=list(c.p)) for c in cs]
-
-
-def _page_keys(ks, t_in: float, sp: float):
-    return [replace(k, t=t_in + k.t * sp, dur=k.dur * sp) for k in ks]
-
-
-def _page_texts(xs, t_in: float, sp: float):
-    return [replace(x, t=t_in + x.t * sp, rate=x.rate / sp) for x in xs]
-
-
-class _PageTimeResolver:
-    """SelectorResolver'ı sahne zamanından sayfa zamanına çevirerek çağırır."""
-
-    def __init__(self, inner, t_in: float, speed: float):
-        self.inner, self.t_in, self.speed = inner, t_in, speed
-
-    def __call__(self, selector, t, contacts, keys, texts, **kw):
-        a, s = self.t_in, self.speed
-        return self.inner(selector, a + t * s, _page_contacts(contacts, a, s), _page_keys(keys, a, s),
-                          _page_texts(texts, a, s), **kw)
-
-    def close(self):
-        self.inner.close()
 
 
 def _texts_at(sc: Scene, t: float) -> list:
@@ -229,22 +188,18 @@ def _over(img: Image.Image, layer: Image.Image, pos, alpha: float = 1.0):
 
 
 class SceneRT:
-    """Bir sahnenin çalışma zamanı: kaynaklar, el izi, başlıklar."""
+    """Bir sahnenin çalışma zamanı: kaynaklar, başlıklar."""
 
-    def __init__(self, story: Story, sc: Scene, fonts: Fonts, bg: Image.Image, chips: KeyChips, ctx=None):
+    def __init__(self, story: Story, sc: Scene, fonts: Fonts, bg: Image.Image, ctx=None):
         self.story = story
         self.sc = sc
         self.fonts = fonts
         self.bg = bg
-        self.chips = chips
         v = story.video
         self.W, self.H, self.fps = v.width, v.height, v.fps
         self.ctx = ctx if ctx is not None else _Layout(story, fonts)
         self.theme = v.theme
         self.devices: dict[str, DeviceRT] = {}
-        self.track = None
-        self.contacts = []
-        self.keys = []
         self.captions = []
         self.card = None
         self.page = None
@@ -263,7 +218,7 @@ class SceneRT:
                 aspects[kind] = pr.width / pr.height
         box = self.ctx.box
         opts = self.ctx.dev_opts
-        self.rects = lay.place(self.W, self.H, sc.layout, aspects, box, self.ctx.cable_room, bool(sc.sound), opts)
+        self.rects = lay.place(self.W, self.H, sc.layout, aspects, box, opts)
         default_on = "tablet" if "tablet" in self.rects else "laptop"
         self.camera = lay.CameraPath(sc.camera, self.rects, self.W, self.H, default_on, box)
         # `s = "fit"` anahtar kareleri sayıya çevrilir (dönüş + içerik kutusu); en büyük ölçek, çözme
@@ -276,65 +231,9 @@ class SceneRT:
                 smax = max([1.0] + [float(kf["s"]) for kf in self.anim_kfs.get(kind, []) if "s" in kf])
                 self.devices[kind] = DeviceRT(kind, self.rects[kind], ref, self.fps, self.camera.max_zoom() * smax,
                                               opts[kind])
-        self._build_touches()
         self._build_captions()
 
     # ── kurulum ──
-    def _build_touches(self):
-        sc, v = self.sc, self.story.video
-        tab = self.devices.get("tablet")
-        style = sc.hand or v.hand
-        scale = sc.hand_scale if sc.hand_scale is not None else v.hand_scale
-        if tab is None:
-            if sc.gestures:
-                log(f"⚠️ sahne #{sc.index + 1}: jestler tablet olmayan yerleşimde yok sayıldı")
-            return
-        x, y, w, h = tab.rect
-        fw = HAND_FW * math.hypot(w, h) * scale
-        cfg = HandConfig(fw=fw)
-        t_in, sp = (tab.ref.clip_in, tab.ref.speed) if tab.ref is not None else (0.0, 1.0)
-        resolver = None
-        if tab.html and any(isinstance(g, dict) and ("on" in g or any(isinstance(v, str) for k, v in g.items()
-                                                                        if k not in ("keys", "type", "ease")))
-                            for g in sc.gestures):
-            from .htmlscreen import SelectorResolver
-            resolver = _PageTimeResolver(SelectorResolver(tab.ref.path, (tab.probe.width, tab.probe.height),
-                                                          tab.crop, self.fps, v.latency * sp, tab.ref.params),
-                                         t_in, sp)
-        try:
-            contacts, keys, texts = compile_gestures(sc.gestures, HandModel(fw / w, cfg.angle, w / h), resolver)
-        finally:
-            if resolver is not None:
-                resolver.close()
-        if sc.touches and sc.touches != "none":
-            tl = TouchLog.load(sc.touches)
-            win = tl.window(t_in, t_in + sc.duration * sp, sc.touch_offset)
-            for c in win.contacts:
-                c.t = [tt / sp for tt in c.t]
-                pts = [tab.media_to_screen(a, b) for a, b in zip(c.x, c.y)]
-                c.x = [p[0] for p in pts]
-                c.y = [p[1] for p in pts]
-                contacts.append(c)
-            for k in win.keys:
-                k.t /= sp
-            keys.extend(win.keys)
-        self.contacts = contacts
-        self.keys = sorted(keys, key=lambda k: k.t)
-        if tab.html:  # sayfa, daireleri süren AYNI temaslardan türeyen jestlerle — SAYFA zamanında — oynar
-            from .htmlscreen import classify
-            tab.timeline = classify(_page_contacts(contacts, t_in, sp), _page_keys(self.keys, t_in, sp),
-                                    _page_texts(texts, t_in, sp), (tab.probe.width, tab.probe.height), tab.crop,
-                                    self.fps, v.latency * sp)
-            tab.timeline["params"] = tab.ref.params
-        elif texts:
-            log(f"⚠️ sahne #{sc.index + 1}: 'type' jesti yalnız HTML ekranlarda görünür")
-        self.ripple = sc.ripple if sc.ripple is not None else v.ripple
-        self.hand_style = None if style == "none" else STYLES[style]
-        self.fw = fw
-        if contacts and self.hand_style is not None:
-            n = int(math.ceil(sc.duration * self.fps)) + 2
-            self.track = HandTrack(contacts, Surface(tab.rect), self.fps, n, cfg)
-
     def _build_captions(self):
         sc, v = self.sc, self.story.video
         prev = self.story.scenes[sc.index - 1] if sc.index > 0 else None
@@ -368,7 +267,7 @@ class SceneRT:
         box = self.ctx.box
         layouts = {}
         for name in ("duo", "tablet", "laptop"):
-            rects = lay.place(W, H, name, aspects, box, self.ctx.cable_room, opts=self.ctx.dev_opts)
+            rects = lay.place(W, H, name, aspects, box, opts=self.ctx.dev_opts)
             layouts[name] = {kd: [v / k for v in r] for kd, r in rects.items()}
         bx0, by0, bx1, by1 = box
         params = dict(self.sc.params)
@@ -376,7 +275,7 @@ class SceneRT:
         params.update({"layouts": layouts, "stage": [css[0], css[1]],
                        "content": [bx0 / k, by0 / k, (bx1 - bx0) / k, (by1 - by0) / k],
                        "captionTop": lay.caption_top(W, H) / k, "safeBottom": lay.safe_bottom(W, H) / k})
-        tl = {"fps": self.fps, "gestures": [], "keys": [], "texts": [], "params": params}
+        tl = {"fps": self.fps, "params": params, "scroll": {"target": self.sc.scroller, "moves": self.sc.scroll}}
         self.page = HtmlSource(self.sc.page, css, (W, H), self.fps, tl)
 
     def _build_card(self):
@@ -442,8 +341,7 @@ class SceneRT:
         return None if ref is None else (ref.path, ref.color, ref.clip_in, ref.speed, repr(ref.params))
 
     # ── çizim ──
-    def draw_device(self, img: Image.Image, kind: str, dp: DevicePose, content, t: float,
-                    receiver: Image.Image | None = None, alpha: float = 1.0):
+    def draw_device(self, img: Image.Image, kind: str, dp: DevicePose, content, t: float, alpha: float = 1.0):
         """Cihazı duruşuyla çiz: dönüş (`rot`), ekran (`on`), kapak (`lid`), saydamlık (`o` × `alpha`).
         `content`: None (sahnenin kendi içeriği, `t` anında) · görüntü · `boyut → görüntü` çağrılabilir."""
         d = self.devices[kind]
@@ -479,8 +377,6 @@ class SceneRT:
                 img.paste(ch.glare, (X, Y), ch.glare)
             if ch.notch is not None:
                 img.paste((10, 10, 12), (X, Y), ch.notch)
-            if receiver is not None:
-                receiver.paste(255, (X + ox, Y + oy), ch.body.getchannel("A"))
             return
         layer, (lx, ly) = self._device_layer(kind, ch, content, lid, shadow=not turned)
         if not turned:
@@ -502,9 +398,6 @@ class SceneRT:
             sh, (dx, dy) = hit
             _over(img, sh, (pos[0] + dx, pos[1] + dy), a)
         _over(img, layer, pos, a)
-        if receiver is not None and a > 0.5:
-            receiver.paste(255, (int(round(pos[0])), int(round(pos[1]))),
-                           layer.getchannel("A").point(lambda v: 255 if v > 200 else 0))
 
     def _device_layer(self, kind, ch, content, lid, shadow: bool):
         """Cihazı (isteğe bağlı gölgesiyle) RGBA katmana çiz → (katman, katmanın ekran sol-üstüne göre yeri).
@@ -594,146 +487,6 @@ class SceneRT:
         for part, qx, qy in parts:
             L.alpha_composite(part, (int(round(bx + qx)), int(round(by + qy))))
 
-    def draw_cable(self, img: Image.Image, poses: dict, t: float, fx: bool = False, alpha: float = 1.0):
-        """USB-C kablo (cable.py): tabletin SAĞ kenarındaki yuvaya; kablo tabletin arkasından geçer.
-        Tabletten ÖNCE çizilir (`fx=False`); "takıldı" vurgusu tabletten SONRA (`fx=True`)."""
-        cb = self.sc.cable
-        if not cb or "laptop" not in poses or "tablet" not in poses or alpha <= 0.002:
-            return
-        from . import cable
-        an = cable.anchors(poses["laptop"], poses["tablet"], img.size)
-        (cable.draw_fx if fx else cable.draw)(img, an, cb, t, alpha)
-
-    def draw_wifi(self, img: Image.Image, poses: dict, t: float, alpha: float = 1.0):
-        """Cihazlar arasında Wi-Fi simgesi: yaylar sırayla belirir, sonra yavaşça nabız atar. Yan yana
-        yerleşimde kapağın kenarı ↔ tablet arasında, üst üste (dikey kadraj) yerleşimde MacBook'un altı
-        ↔ tabletin üstü arasında."""
-        wf = self.sc.wifi
-        if not wf or "laptop" not in poses or "tablet" not in poses or alpha <= 0.002:
-            return
-        t0, dur = float(wf.get("t", 1.0)), float(wf.get("dur", 3.0))
-        if t < t0:
-            return
-        k_out = 1.0 - ease((t - t0 - dur) / 0.5, "in")
-        if k_out <= 0.01:
-            return
-        Lp, Tp = poses["laptop"], poses["tablet"]
-        lw, lh = Lp.rect[2], Lp.rect[3]
-        th = Tp.rect[3]
-        lbb, tbb = Lp.body_bbox(), Tp.body_bbox()
-        u = min(img.size)
-        if tbb[1] >= lbb[3] - 0.02 * th:   # üst üste
-            gap = tbb[1] - lbb[3]
-            R = max(u * 0.012, min(gap * 0.5, th * 0.16))     # simge ~1,12R yüksek → aralığa sığar
-            cx = (tbb[0] + tbb[2]) / 2
-            cy = (lbb[3] + tbb[1]) / 2 + R * 0.44   # simge (yaylar + nokta) aralıkta ortalı
-        else:
-            # simge tabletin orta yüksekliğinde: orada boşluk KAPAĞIN kenarından başlar (alt gövdenin
-            # taşan kenarından değil — öyle ölçülünce boşluk yarıya iniyor, simge seçilmiyordu)
-            g = dev.geometry("laptop", lw, lh, Lp.opts)
-            lr = dev.lid_marks(lw, Lp.opts)["lid_right"]
-            lid_r = Lp.bbox(lw - lr, g.top, lr, lh + lw * dev.laptop_spec(Lp.opts)["chin"])[2]   # kapağın sağ kenarı
-            gap = tbb[0] - lid_r
-            R = max(u * 0.012, min(gap * 0.42, th * 0.16))
-            cx = (lid_r + tbb[0]) / 2
-            cy = (tbb[1] + tbb[3]) / 2
-        S = 3
-        size = int(R * 2.6)
-        lay_ = Image.new("RGBA", (size * S, size * S), (0, 0, 0, 0))
-        d = ImageDraw.Draw(lay_)
-        ox, oy = size * S / 2, size * S * 0.72          # simgenin dibi (nokta)
-        col = rgb("accent")
-        for i, rr in enumerate((0.0, 0.42, 0.72, 1.0)):
-            a_in = ease((t - t0 - 0.12 * i) / 0.3, "out")
-            pulse = 0.78 + 0.22 * math.sin((t - t0) * 4.2 - i * 0.9)
-            a = int(255 * a_in * pulse * k_out * clamp(alpha))
-            if a <= 2:
-                continue
-            if rr == 0.0:
-                r0 = R * 0.12 * S
-                d.ellipse((ox - r0, oy - r0, ox + r0, oy + r0), fill=col + (a,))
-            else:
-                r = R * rr * S
-                d.arc((ox - r, oy - r, ox + r, oy + r), 225, 315, fill=col + (a,), width=max(2, int(R * 0.13 * S)))
-        lay_ = lay_.reduce(S)
-        img.paste(lay_, (int(cx - size / 2), int(cy - size * 0.72)), lay_)
-
-    def draw_sound(self, img: Image.Image, poses: dict, t: float, alpha: float = 1.0):
-        """Tabletin hoparlörleri (iki KISA kenar) dışında ses dalgaları: Wi-Fi simgesinin dilinde yaylar,
-        sırayla belirir, hafifçe nabız atar, söner. Cihazın yerel çerçevesinde → `rot` ile döner."""
-        sd = self.sc.sound
-        if not sd or "tablet" not in poses or alpha <= 0.002:
-            return
-        t0, dur = float(sd.get("t", 0.5)), float(sd.get("dur", 3.0))
-        if t < t0:
-            return
-        k_out = 1.0 - ease((t - t0 - dur) / 0.5, "in")
-        if k_out <= 0.01:
-            return
-        Tp = poses["tablet"]
-        w, h = Tp.rect[2], Tp.rect[3]
-        g = dev.geometry("tablet", w, h)
-        R = h * 0.11
-        x0, y0, x1, y1 = Tp.body_bbox()
-        m = R * 1.6 + 4
-        W, H = img.size
-        X0, Y0 = max(0, int(x0 - m)), max(0, int(y0 - m))
-        X1, Y1 = min(W, int(x1 + m) + 1), min(H, int(y1 + m) + 1)
-        if X1 <= X0 or Y1 <= Y0:
-            return
-        S = 3
-        lay_ = Image.new("RGBA", ((X1 - X0) * S, (Y1 - Y0) * S), (0, 0, 0, 0))
-        d = ImageDraw.Draw(lay_)
-        col = rgb("accent")
-        width = max(2, int(R * 0.12 * S))
-        drawn = False
-        for side in (-1, 1):
-            ex = g.left if side < 0 else g.right                 # gövdenin kısa kenarı (yerel)
-            cxl, cyl = ex + side * R * 0.25, h / 2
-            for i, rr in enumerate((0.45, 0.75, 1.05)):
-                a_in = ease((t - t0 - 0.12 * i) / 0.3, "out")
-                pulse = 0.78 + 0.22 * math.sin((t - t0) * 4.2 - i * 0.9)
-                a = int(255 * a_in * pulse * k_out * clamp(alpha))
-                if a <= 2:
-                    continue
-                pts = []
-                for j in range(15):
-                    ang = math.radians(-38 + 76 * j / 14)          # dışa doğru ±38°
-                    px, py = Tp.local(cxl + side * R * rr * math.cos(ang), cyl + R * rr * math.sin(ang))
-                    pts.append(((px - X0) * S, (py - Y0) * S))
-                d.line(pts, fill=col + (a,), width=width, joint="curve")
-                for p in (pts[0], pts[-1]):                      # yuvarlak uçlar
-                    d.ellipse((p[0] - width / 2, p[1] - width / 2, p[0] + width / 2, p[1] + width / 2), fill=col + (a,))
-                drawn = True
-        if drawn:
-            lay_ = lay_.reduce(S)
-            img.paste(lay_, (X0, Y0), lay_)
-
-    def draw_interaction(self, img: Image.Image, t: float, dp: DevicePose | None, receiver, alpha: float = 1.0):
-        """Dokunuş efektleri + el + tuş çipleri, tabletin DURUŞUYLA (kamera + anim x/y/s/rot) — cihaz
-        kayar, büyür, dönerse daireler ve çipler onunla gider."""
-        tab = self.devices.get("tablet")
-        if tab is None or dp is None or not (self.contacts or self.keys) or alpha <= 0.002:
-            return
-        x, y, w, h = tab.rect
-        k = dp.rect[2] / w   # dünya → sahne ölçeği
-        to_stage = dp.point
-        r0 = self.fw * k * 0.62
-        if self.ripple and alpha > 0.5:
-            draw_touch_fx(img, self.contacts, t, to_stage, r0, dots=self.hand_style is None)
-        if self.track is not None:
-            pose = self.track.at(int(round(t * self.fps)))
-            if pose is not None:
-                if alpha < 0.999:
-                    pose = copy.copy(pose)
-                    pose.visible *= alpha
-                cam = Camera(k, (x, y), (dp.rect[0], dp.rect[1]))   # isteğe bağlı el `rot`u izlemez
-                draw_hand(img, pose, cam, self.hand_style, receiver)
-        if self.keys and alpha > 0.5:
-            kx, ky = self.sc.keys_at or (0.5, 0.86)
-            cx, cy = to_stage(kx, ky)
-            self.chips.draw(img, self.keys, t, cx, cy)
-
     def draw_captions(self, img: Image.Image, t: float, alpha: float = 1.0,
                       title_alpha: float | None = None, sub_alpha: float | None = None):
         """`title_alpha`/`sub_alpha` verilirse geçişte başlık ve alt satır ayrı karışır."""
@@ -762,10 +515,8 @@ class SceneRT:
             return img
         img = self.bg.copy()
         cam = self.camera_at(t)
-        receiver = Image.new("L", img.size, 0) if self.track is not None else None
         poses = self.poses(cam, t)
-        items = [(k, self, t, poses[k], None, 1.0) for k in ("laptop", "tablet") if k in poses]
-        _compose(img, items, [(self, t, poses, 1.0, 1.0)], receiver)
+        _compose(img, [(k, self, t, poses[k], None, 1.0) for k in ("laptop", "tablet") if k in poses])
         self.draw_captions(img, t)
         return img
 
@@ -788,23 +539,12 @@ class SceneRT:
             self.page.close()
 
 
-def _compose(img: Image.Image, items, owners, receiver):
+def _compose(img: Image.Image, items):
     """Bir karenin cihaz katmanı — TEK sahne karesi de geçiş (morph) karesi de buradan çizilir.
 
-    items:  [(tür, sahne, t, duruş, içerik, saydamlık)] çizim sırasıyla (MacBook → tablet)
-    owners: [(sahne, t, duruşlar, ağırlık, dokunuş_saydamlığı)] — her sahnenin kablo/Wi-Fi/ses/dokunuş
-            katmanı, kendi zamanında ve bu karedeki cihaz duruşlarıyla (geçişte ağırlıkla söner)."""
+    items: [(tür, sahne, t, duruş, içerik, saydamlık)] çizim sırasıyla (dizüstü → tablet)"""
     for kind, rt, t, pose, content, alpha in items:
-        if kind == "tablet":  # kablo tabletin ARKASINDAN geçer
-            for ort, ot, ops, wt, _ in owners:
-                ort.draw_cable(img, ops, ot, alpha=wt)
-        rt.draw_device(img, kind, pose, content, t, receiver, alpha)
-    for ort, ot, ops, wt, _ in owners:
-        ort.draw_cable(img, ops, ot, fx=True, alpha=wt)
-        ort.draw_wifi(img, ops, ot, wt)
-        ort.draw_sound(img, ops, ot, wt)
-    for ort, ot, ops, wt, ta in owners:
-        ort.draw_interaction(img, ot, ops.get("tablet"), receiver, ta)
+        rt.draw_device(img, kind, pose, content, t, alpha)
 
 
 def _badge(fonts: Fonts, text: str, u: float) -> Image.Image:
@@ -825,10 +565,8 @@ class _Layout:
     """Senaryo düzeyinde yerleşim bağlamı (her parça sürecinde aynı → deterministik):
     - `box`: içerik kutusu — başlık bandı senaryodaki EN UZUN (sarılmış) başlıktan ve `caption_size`tan;
       cihaz yerleşimi, kamera, `s = "fit"` ve tam ekran sayfanın `promo.params.content`i HEP bunu kullanır
-    - `cable_room`: senaryoda kablo varsa üst üste (dikey) MacBook+tablet yerleşimi kabloya iki yandan
-      pay ayırır (bütün duo sahnelerinde → sahneler arasında cihazlar zıplamaz)
     - `dev_opts`: cihaz → çizim seçenekleri (dizüstü modeli + kaplaması, tablet rengi) — senaryo düzeyinde
-      tek: yerleşim, duruş, gövde çizimi ve kablo yuvası hep aynı modeli görür"""
+      tek: yerleşim, duruş ve gövde çizimi hep aynı modeli görür"""
 
     def __init__(self, story: Story, fonts: Fonts):
         v = story.video
@@ -841,7 +579,6 @@ class _Layout:
             for title, sub in dict.fromkeys(texts):
                 band = max(band, Caption(fonts, W, H, title, sub, v.theme, v.caption_size).extent())
         self.box = lay.content_box(W, H, v.caption_size, band)
-        self.cable_room = any(sc.cable for sc in story.scenes)
         self.dev_opts = {"laptop": {"finish": v.laptop_finish, "model": v.laptop_model}, "tablet": {"color": v.tablet_color}}
         self.story = story
         self._aspects = {}
@@ -870,7 +607,6 @@ class Timeline:
         self.fonts = Fonts(story.video.font)
         v = story.video
         self.bg = background(v.width, v.height, v.theme, v.background)
-        self.chips = KeyChips(self.fonts, min(v.width, v.height))
         self.layout = _Layout(story, self.fonts)
         self.box = self.layout.box
         self.rts: dict[int, SceneRT] = {}
@@ -878,7 +614,7 @@ class Timeline:
     def _rt(self, sc: Scene) -> SceneRT:
         rt = self.rts.get(sc.index)
         if rt is None:
-            rt = SceneRT(self.story, sc, self.fonts, self.bg, self.chips, self.layout)
+            rt = SceneRT(self.story, sc, self.fonts, self.bg, self.layout)
             self.rts[sc.index] = rt
         return rt
 
@@ -916,16 +652,14 @@ class Timeline:
     def _morph(self, A: SceneRT, ta: float, B: SceneRT, tb: float, w: float) -> Image.Image:
         """İki cihaz sahnesi arası, NORMAL karelerle aynı yoldan (`_compose`): ortak cihazın duruşu
         (dikdörtgen + tüm anim alanları: rot/on/lid/o/…) ara değerlenir, içerik çapraz geçer; yalnız
-        birinde olan cihaz kendi duruşuyla söner; kablo/Wi-Fi/ses ve dokunuşlar sahneleriyle karışır."""
+        birinde olan cihaz kendi duruşuyla söner."""
         img = self.bg.copy()
         ca, cb = A.camera_at(ta), B.camera_at(tb)
         pa, pb = A.poses(ca, ta), B.poses(cb, tb)
-        receiver = Image.new("L", img.size, 0)
-        own_a, own_b, items = {}, {}, []
+        items = []
         for kind in ("laptop", "tablet"):
             if kind in pa and kind in pb:
                 p = DevicePose.lerp(pa[kind], pb[kind], w)
-                own_a[kind] = own_b[kind] = p
                 da, db = A.devices[kind], B.devices[kind]
                 if da.still and db.still and A.media_key(kind) == B.media_key(kind):
                     content = None   # aynı durağan içerik: B'ninki
@@ -934,14 +668,11 @@ class Timeline:
                 items.append((kind, B, tb, p, content, 1.0))
             elif kind in pa:
                 p = pa[kind].scaled(1 - 0.05 * w)
-                own_a[kind] = p
                 items.append((kind, A, ta, p, None, 1 - w))
             elif kind in pb:
                 p = pb[kind].scaled(0.95 + 0.05 * w)
-                own_b[kind] = p
                 items.append((kind, B, tb, p, None, w))
-        _compose(img, items, [(A, ta, own_a, 1 - w, 1 - ease(w / 0.6, "inout")),
-                              (B, tb, own_b, w, ease((w - 0.4) / 0.6, "inout"))], receiver)
+        _compose(img, items)
         ca_, cb_ = A.caption_texts(ta), B.caption_texts(tb)
         if ca_ == cb_:
             B.draw_captions(img, tb)
@@ -1318,10 +1049,8 @@ def timeline_text(story_path: str, opts: dict) -> str:
         what = sc.type if sc.type != "device" else sc.layout
         cap = sc.caption or sc.title or ""
         extra = []
-        if sc.gestures:
-            extra.append(f"{len(sc.gestures)} jest")
-        if sc.touches:
-            extra.append("kayıtlı dokunuş")
+        if sc.scroll or any(r and r.scroll for r in (sc.tablet, sc.laptop)):
+            extra.append("kaydırma")
         if sc.camera:
             extra.append("kamera")
         ov = story.overlap(sc)

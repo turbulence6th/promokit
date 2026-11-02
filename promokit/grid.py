@@ -1,6 +1,6 @@
 """Koordinat ızgarası: bir ekran görüntüsü/video karesinin üstüne normalize ızgara çizer.
 
-Jest konumu yazarken `tap = [0.42, 0.31]` gibi değerleri gözle okumak için.
+Kamera `at = [0.42, 0.31]` gibi ekran-normalize noktaları gözle okumak için.
 """
 from __future__ import annotations
 

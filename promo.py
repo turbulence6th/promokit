@@ -1,13 +1,12 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-promokit — senaryodan (TOML) ürün tanıtım videosu üreten araç
+promokit — HTML sayfalarından (ve videolardan) animasyonlu tanıtım videosu üreten araç
 
-Akış:  YAKALA  →  SENARYO  →  RENDER
-  1) capture  : Mac ekranını (ScreenCaptureKit) / Android ekranını (adb) kaydet;
-                isteğe bağlı olarak Android'deki GERÇEK dokunuşları (getevent) eşzamanlı yakala
-  2) senaryo  : TOML dosyası — sahneler, cihaz yerleşimi, jestler, başlıklar, kamera
-  3) render   : cihaz mockup'ı + ekranda kayıt/HTML sayfa + jestleri gösteren daireler → MP4
+Akış:  HTML + SENARYO (TOML)  →  RENDER (MP4)
+  1) HTML     : sayfanız (CSS animasyonları, kaydırma, kendi JS'iniz) başsız tarayıcıda KARE KARE oynatılır
+  2) senaryo  : TOML dosyası — sahneler, kaydırma zaman çizelgesi, cihaz çerçevesi, başlıklar, kamera, ses
+  3) render   : tam kare ya da tablet/dizüstü çerçevesi içinde → MP4 (+ seslendirme, müzik, altyazı)
 
 Komutlar:
   render  STORY.toml [-o out.mp4] [--aspect 9:16] [--size 1080] [--fps 60] [-j 6] [--preview]
@@ -19,11 +18,9 @@ Komutlar:
   subs    STORY.toml [--lang tr]                 seslendirmeden altyazı (SRT)
   burn    VIDEO.mp4 [--lang tr] [-o out.mp4]     altyazıyı görüntüye yak
   music   [--dur 60] [--mood bright]             telifsiz yer tutucu fon müziği üret
-  grid    MEDYA [-t 2.0] [-o grid.png]           koordinat ızgarası (jest konumu seçmek için)
-  capture list | mac | tablet | shot ...         kayıt (ayrıntı: capture -h)
-  touches ÇEKİM [--plot out.png] [--offset S]    kaydedilmiş dokunuşları incele / senkronla
+  grid    MEDYA [-t 2.0] [-o grid.png]           koordinat ızgarası (kamera `at` noktası seçmek için)
 
-Gereksinim: Python 3.11+ (tomllib), Pillow, ffmpeg. Kayıt için: macOS 13+ + Xcode CLT (swiftc), adb.
+Gereksinim: Python 3.11+ (tomllib), Pillow, ffmpeg, Chromium tabanlı bir tarayıcı (Chrome/Brave/Edge/Chromium).
 Ayrıntılı kılavuz: README.md
 """
 import argparse
@@ -161,11 +158,6 @@ def main(argv=None):
     p.add_argument("-t", "--time", type=float, default=0.0)
     p.add_argument("-o", "--out")
 
-    from promokit import capture as cap_mod
-    cap_mod.add_parser(sub)
-    from promokit import sync as sync_mod
-    sync_mod.add_parser(sub)
-
     a = ap.parse_args(argv)
     try:
         if a.cmd == "render":
@@ -223,10 +215,6 @@ def main(argv=None):
             from promokit.grid import grid
             out = a.out or os.path.splitext(a.media)[0] + "-grid.png"
             print(grid(a.media, a.time, out))
-        elif a.cmd == "capture":
-            cap_mod.run(a)
-        elif a.cmd == "touches":
-            sync_mod.run(a)
     except PromoError as e:
         log(f"✗ {e}")
         return 1

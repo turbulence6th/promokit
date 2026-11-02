@@ -2,7 +2,7 @@
 `voice.schedule` kaydırması). Kullanıcı (2026-10-20): videolar İngilizce seslendirilir; Türkçe
 YouTube'a kendi altyazı izi olarak eklenir. Satırdaki çeviri: `voice = [ { …, tr = "…" } ]`.
 
-    python3 promo.py subs examples/ornek.toml --lang tr
+    python3 promo.py subs examples/animasyon.toml --lang tr
 """
 from __future__ import annotations
 

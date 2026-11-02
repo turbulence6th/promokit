@@ -1,0 +1,45 @@
+# promokit — a real, multi-file website rendered to video (examples/site/: index.html + site.css + site.js + hero.svg)
+#
+#   python3 promo.py sheet  examples/site.toml --every 1.5
+#   python3 promo.py render examples/site.toml --preview
+#   python3 promo.py render examples/site.toml
+#
+# The page is an ordinary website: its CSS animations, sticky nav and IntersectionObserver all run. The `scroll`
+# timeline below drives the page's REAL scrolling; `promo.on('frame')` (inside index.html) opens the FAQ on cue.
+[video]
+aspect = "16:9"
+size = 1080
+fps = 60
+lang = "en"
+music = "bed"            # royalty-free background bed, generated with ffmpeg
+
+[voice]
+engine = "say"           # macOS built-in voice: draft quality, zero setup (see README for better engines)
+id = "Samantha"
+lang = "en"
+
+[[scene]]
+type = "title"
+duration = 2.4
+title = "From a web page to a video."
+subtitle = "Your site's own HTML, CSS and JavaScript — rendered frame by frame."
+badge = "promokit example"
+voice = [ { t = 0.3, text = "Your website, straight to video." } ]
+
+[[scene]]
+layout = "laptop"
+duration = 13
+laptop = { src = "site/index.html", scroll = [
+  { t = 1.6, to = "#features", offset = -64, dur = 1.6 },    # glide to a section by CSS selector
+  { t = 4.8, to = "#pricing",  offset = -64, dur = 1.6 },
+  { t = 8.2, to = "#faq",      offset = -64, dur = 1.6 },
+  { t = 11.4, y = 0,                         dur = 1.4 },    # …or to an exact pixel position
+] }
+caption = "A real page, scrolled on cue"
+subcaption = "Sticky nav, CSS animations and scroll-reveals all just work"
+voice = [
+  { t = 0.5, text = "This is an ordinary web page." },
+  { t = 3.0, text = "Scroll to any section by its selector," },
+  { t = 6.4, text = "and its own animations play as you arrive." },
+  { t = 9.6, text = "No screen recording needed." },
+]

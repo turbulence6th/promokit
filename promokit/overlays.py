@@ -7,10 +7,10 @@ from __future__ import annotations
 
 import math
 
-from PIL import Image, ImageDraw, ImageFilter, ImageMath
+from PIL import Image, ImageDraw, ImageMath
 
 from .text import Fonts, render_text
-from .util import bump, clamp, ease, lerp, mix, parse_color, rgb
+from .util import clamp, ease, rgb
 
 SS = 4
 
@@ -92,98 +92,6 @@ def glow_background(W: int, H: int, cx: float, cy: float, R: float) -> Image.Ima
             n=noise.convert("F"))
         chans.append(ch.convert("L"))
     return Image.merge("RGB", chans)
-
-
-# ── Dokunuş efektleri ────────────────────────────────────────────────────────
-def _ring(r: float, width: float, color, alpha: float, halo: float = 0.0) -> Image.Image:
-    size = int(2 * (r + width + halo) + 6)
-    S = SS
-    im = Image.new("RGBA", (size * S, size * S), (0, 0, 0, 0))
-    d = ImageDraw.Draw(im)
-    c = size * S / 2
-    if halo > 0:
-        rr = (r + width / 2 + halo / 2) * S
-        d.ellipse((c - rr, c - rr, c + rr, c + rr), outline=(15, 20, 34, int(70 * alpha)), width=max(1, int(halo * S)))
-    rr = (r + width / 2) * S
-    d.ellipse((c - rr, c - rr, c + rr, c + rr), outline=tuple(color[:3]) + (int(255 * alpha),),
-              width=max(1, int(width * S)))
-    return im.reduce(S)
-
-
-_DOTS: dict = {}
-
-
-def _dot(r: float, alpha: float) -> Image.Image:
-    """Dokunuş dairesi (el çizilmediğinde temas noktası): yarı saydam beyaz dolgu + ince koyu kenar +
-    yumuşak gölge — açık sayfada da koyu ekranda (Mission Control, klavye) da seçilir."""
-    key = (round(r * 2) / 2, round(alpha * 20))
-    im = _DOTS.get(key)
-    if im is not None:
-        return im
-    # Çizim de KUANTİZE değerlerle: önbelleği ilk dolduran r'yi kullanmak, aynı karede hangi parçanın
-    # (paralel render) önce hangi r'yi gördüğüne göre farklı sprite üretiyordu (38↔39 px)
-    r, a = key[0], key[1] / 20
-    pad = int(r * 0.5) + 4
-    size = int(2 * r) + 2 * pad
-    S = SS
-    sh = Image.new("L", (size, size), 0)
-    c = size / 2
-    ImageDraw.Draw(sh).ellipse((c - r, c - r + r * 0.12, c + r, c + r + r * 0.12), fill=int(80 * a))
-    sh = sh.filter(ImageFilter.GaussianBlur(max(1.0, r * 0.22)))
-    im = Image.new("RGBA", (size, size), (15, 20, 34, 0))
-    im.putalpha(sh)
-    top = Image.new("RGBA", (size * S, size * S), (0, 0, 0, 0))
-    d = ImageDraw.Draw(top)
-    cs = size * S / 2
-    d.ellipse((cs - r * S, cs - r * S, cs + r * S, cs + r * S), fill=(255, 255, 255, int(150 * a)),
-              outline=(15, 20, 34, int(110 * a)), width=max(1, int(r * 0.08 * S)))
-    im.alpha_composite(top.reduce(S))
-    if len(_DOTS) > 256:
-        _DOTS.clear()
-    _DOTS[key] = im
-    return im
-
-
-def _paste_center(img, sprite, x, y):
-    w, h = sprite.size
-    img.paste(sprite, (int(round(x - w / 2)), int(round(y - h / 2))), sprite)
-
-
-DOT_OUT = 0.18   # dokunuş dairesinin parmak kalktıktan sonra sönme süresi (sn)
-
-
-def draw_touch_fx(img: Image.Image, contacts, t: float, to_stage, r0: float, dots: bool = False):
-    """Dokunuş göstergesi: dokunulan yerde daire (el çizilmediğinde) + uzun basmada ürünün halkası.
-
-    Başka süs YOK: temas anında yayılan halka ve kaydırma izi kaldırıldı — iz basamak basamak
-    çiziliyordu (çentikli kule gibi), halkalar çok parmakta üst üste biniyordu (kullanıcı: "saçma
-    sapan eklemeler olmasın", 2026-10-19). El çizilirse bu katmanın ÜSTÜNE çizilir.
-    """
-    for c in contacts:
-        if c.on != "screen":
-            continue
-        # Uzun bas: üründe bir halka belirir, ~400 ms'de YEŞİLE döner ("tutuldu" — bırakınca sağ tık,
-        # sürüklerse seçim/sürükleme).
-        if c.t1 - c.t0 >= 0.4 and c.t0 + 0.12 <= t <= c.t1 + 0.2 and c.tool != "pen":
-            p0 = c.pos(c.t0)
-            still = all(math.dist(c.pos(c.t0 + k * 0.04), p0) < 0.012 for k in range(11))
-            if still:
-                x, y = to_stage(*c.pos(min(t, c.t1)))
-                armed = t >= c.t0 + 0.4
-                grow = ease((t - c.t0 - 0.12) / 0.28, "out")
-                fade = 1.0 if t <= c.t1 else 1 - (t - c.t1) / 0.2
-                col = (52, 199, 89) if armed else (255, 255, 255)
-                _paste_center(img, _ring(r0 * (0.95 + 0.35 * grow), max(2.0, r0 * 0.16), col, 0.9 * fade, halo=r0 * 0.1),
-                              x, y)
-        if dots and c.t0 - 0.01 <= t <= c.t1 + DOT_OUT:
-            # belirir (kısa basma çöküşüyle), parmağı izler, kalkınca hafif büyüyerek söner
-            k_in = ease((t - c.t0) / 0.07, "out")
-            k_out = 1.0 - ease((t - c.t1) / DOT_OUT, "out") if t > c.t1 else 1.0
-            press = bump(t, c.t0, 0.05, 0.16)
-            scale = (0.72 + 0.28 * k_in) * (1 - 0.08 * press) * (1 + 0.18 * (1 - k_out))
-            r = r0 * (0.24 if c.tool == "pen" else 0.62) * scale
-            x, y = to_stage(*c.pos(min(t, c.t1)))
-            _paste_center(img, _dot(r, min(k_in, k_out) * (1.4 if c.tool == "pen" else 1.0)), x, y)
 
 
 def accent_bar(w: int, h: int) -> Image.Image:
@@ -293,51 +201,3 @@ class Caption:
             y += self.gap * 1.2
             sa = a * ease((t_in - 0.1) / 0.9, "out") if sub_alpha is None else a * clamp(sub_alpha)
             paste_rgba(img, self.sub, cx - self.sub.size[0] / 2, y - self.spad, sa)
-
-
-# ── Tuş çipleri ──────────────────────────────────────────────────────────────
-class KeyChips:
-    def __init__(self, fonts: Fonts, u: float):
-        self.fonts = fonts
-        self.u = u
-        self._cache = {}
-
-    def sprite(self, label: str) -> Image.Image:
-        im = self._cache.get(label)
-        if im is None:
-            parts = label.split()
-            size = self.u * 0.030
-            chips = []
-            for p in parts:
-                txt = render_text(self.fonts, p, size, 600, "#ffffff")
-                tw, th = txt.size
-                w = max(int(size * 1.9), tw + int(size * 0.5))
-                h = int(size * 1.95)
-                S = 3
-                m = Image.new("L", (w * S, h * S), 0)
-                ImageDraw.Draw(m).rounded_rectangle((0, 0, w * S - 1, h * S - 1), radius=size * 0.42 * S, fill=225)
-                chip = Image.new("RGBA", (w, h), (15, 20, 34, 0))
-                chip.putalpha(m.reduce(S))
-                chip.alpha_composite(txt, (int((w - tw) / 2), int((h - th) / 2)))
-                chips.append(chip)
-            gap = int(size * 0.35)
-            W = sum(c.size[0] for c in chips) + gap * (len(chips) - 1)
-            H = max(c.size[1] for c in chips)
-            im = Image.new("RGBA", (W, H), (0, 0, 0, 0))
-            x = 0
-            for c in chips:
-                im.alpha_composite(c, (x, (H - c.size[1]) // 2))
-                x += c.size[0] + gap
-            self._cache[label] = im
-        return im
-
-    def draw(self, img: Image.Image, keys, t: float, cx: float, cy: float):
-        live = [k for k in keys if k.t <= t <= k.t + k.dur]
-        for i, k in enumerate(live[-1:]):  # aynı anda tek kombinasyon
-            age = t - k.t
-            a = ease(age / 0.18, "out") * (1 - ease((age - (k.dur - 0.25)) / 0.25, "in"))
-            sp = self.sprite(k.label)
-            sc = lerp(0.92, 1.0, ease(age / 0.22, "outback"))
-            if abs(sc - 1) > 0.005:
-                sp = sp.resize((max(1, int(sp.size[0] * sc)), max(1, int(sp.size[1] * sc))), Image.Resampling.BICUBIC)
-            paste_rgba(img, sp, cx - sp.size[0] / 2, cy - sp.size[1] / 2, a)
