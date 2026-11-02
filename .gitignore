@@ -1,7 +1,5 @@
-# üretilen her şey work/ altına gider (çıktılar, ses önbelleği, çekimler, TTS ortamı, fon müziği)
+# üretilen her şey work/ altına gider (çıktılar, ses önbelleği, TTS ortamı, fon müziği)
 work/
-# Swift ekran kaydedicinin derlenmiş hâli (ilk `capture mac`te otomatik derlenir)
-.build/
 __pycache__/
 *.pyc
 .DS_Store
