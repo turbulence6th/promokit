@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<!-- Sayfanın CSS px boyutu. Cihaz ekranına tam oturur; 1400×920 geniş (16:10) bir tablet/dizüstü ekranıdır. -->
+<meta name="promo-viewport" content="1400x920">
+<title>Örnek ekran — Hızlı Notlar</title>
+<!--
+  Bu sayfa promokit'in HTML ekran sözleşmesinin EN KÜÇÜK örneğidir. promo.js'i (jest oynatıcı) sayfaya SİZ
+  eklemezsiniz — araç tarayıcıya kendisi enjekte eder. Davranışlar yalnız öznitelikle:
+
+    data-scroll            tek parmakla kaydırılır (momentum dahil)
+    data-tap-select="grup" dokununca `selected` sınıfı grupta buna geçer
+    data-tap-toggle="sınıf" dokununca sınıf açılıp kapanır
+    data-text-field        metin alanı (içindeki [data-type-target]'a `type` jesti yazar)
+    canvas[data-ink]       kalemle çizilen mürekkep; [data-ink-pick="#hex"] renk seçer
+    data-zoom="1,3"        çimdikle yakınlaşır
+
+  ⛔ Sayfada requestAnimationFrame / setTimeout / Date.now ile zaman tutmayın: sayfa gerçek zamanda
+  çalışmaz, kare kare oynatılır. CSS animasyon/geçişleri serbesttir (araç onları kareye sabitler).
+-->
+<style>
+  :root { --ink: #1c2230; --muted: #6b7385; --line: #e3e7ef; --accent: #3d6df2; --bg: #f5f7fb; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; width: 1400px; height: 920px; overflow: hidden; background: var(--bg);
+    font: 16px/1.4 -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; color: var(--ink); }
+  .top { height: 72px; display: flex; align-items: center; gap: 14px; padding: 0 32px; background: #fff;
+    border-bottom: 1px solid var(--line); }
+  .top h1 { margin: 0; font-size: 22px; letter-spacing: -.01em; }
+  .top .sp { flex: 1; }
+  .like { display: inline-flex; align-items: center; gap: 8px; padding: 9px 18px; border-radius: 999px;
+    border: 1px solid var(--line); background: #fff; color: var(--muted); font-weight: 600; transition: all .25s; }
+  .like.on { background: var(--accent); border-color: var(--accent); color: #fff; transform: scale(1.04); }
+  .main { display: flex; height: calc(920px - 72px); }
+  .list { width: 430px; flex: none; background: #fff; border-right: 1px solid var(--line); padding: 16px; }
+  .scroller { height: 100%; overflow: hidden; }            /* data-scroll: ilk çocuk taşınır */
+  .note { padding: 14px 16px; margin-bottom: 10px; border: 1px solid var(--line); border-radius: 12px; background: #fff;
+    transition: background .2s, border-color .2s; }
+  .note b { display: block; font-size: 16px; }
+  .note span { color: var(--muted); font-size: 14px; }
+  .note.selected { background: #eaf0ff; border-color: var(--accent); }
+  .edit { flex: 1; padding: 28px 36px; display: flex; flex-direction: column; gap: 20px; }
+  .field { height: 64px; background: #fff; border: 1px solid var(--line); border-radius: 12px; padding: 0 20px;
+    display: flex; align-items: center; font-size: 22px; }
+  .field [data-type-target]::after { content: ""; display: inline-block; width: 2px; height: 1.1em; margin-left: 2px;
+    background: var(--accent); vertical-align: -.15em; animation: blink 1s steps(1) infinite; }
+  .field [data-type-target]:empty::before { content: "Yeni not yazın…"; color: #9aa2b3; }
+  @keyframes blink { 50% { opacity: 0; } }
+  .pal { display: flex; gap: 10px; align-items: center; color: var(--muted); font-size: 14px; }
+  .sw { width: 28px; height: 28px; border-radius: 50%; border: 3px solid #fff; box-shadow: 0 0 0 1px var(--line); }
+  .sw.selected { box-shadow: 0 0 0 2px var(--ink); }
+  canvas { flex: 1; width: 100%; background: #fff; border: 1px solid var(--line); border-radius: 12px; }
+</style>
+</head>
+<body>
+  <div class="top">
+    <h1>Hızlı Notlar</h1>
+    <div class="sp"></div>
+    <div id="like" class="like" data-tap-toggle="on">♥ Beğen</div>
+  </div>
+  <div class="main">
+    <div class="list">
+      <div class="scroller" data-scroll>
+        <div id="notes"></div>
+      </div>
+    </div>
+    <div class="edit">
+      <div id="field" class="field" data-text-field><span data-type-target></span></div>
+      <div class="pal">Mürekkep:
+        <div id="c-blue" class="sw selected" style="background:#3d6df2" data-ink-pick="#3d6df2" data-tap-select="ink"></div>
+        <div id="c-red"  class="sw" style="background:#e0442e" data-ink-pick="#e0442e" data-tap-select="ink"></div>
+      </div>
+      <canvas id="sketch" data-ink="#3d6df2" width="880" height="640"></canvas>
+    </div>
+  </div>
+  <script>
+    // Statik içerik üretmek serbest (zaman tutmuyor): 14 örnek not.
+    const titles = ["Pazartesi planı", "Alışveriş", "Toplantı notları", "Fikirler", "Kitap listesi", "Gezi rotası", "Tarifler",
+      "Hatırlatmalar", "Bütçe", "Proje taslağı", "Spor programı", "Film listesi", "Doğum günü", "Yapılacaklar"];
+    document.getElementById("notes").innerHTML = titles.map((t, i) =>
+      `<div class="note" id="n${i + 1}" data-tap-select="note"><b>${t}</b><span>Örnek içerik satırı ${i + 1}</span></div>`).join("");
+  </script>
+</body>
+</html>

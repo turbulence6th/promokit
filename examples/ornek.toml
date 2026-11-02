@@ -1,0 +1,71 @@
+# promokit — ÖRNEK SENARYO
+#
+# Çalıştırmak için (promokit klasöründen):
+#   python3 promo.py info   examples/ornek.toml            # zaman çizelgesi (render yok)
+#   python3 promo.py sheet  examples/ornek.toml --every 0.75   # tüm akış tek PNG'de (kontak sayfası)
+#   python3 promo.py still  examples/ornek.toml -t 4.5     # tek kare
+#   python3 promo.py render examples/ornek.toml --preview  # 540p/30 fps taslak (hızlı)
+#   python3 promo.py render examples/ornek.toml            # 1080p60 → work/out/ornek.mp4
+#   python3 promo.py render examples/ornek.toml --aspect 9:16   # aynı senaryo, dikey (Shorts/Reels)
+#
+# TOML kuralı: satır içi tablo `{ ... }` TEK satırda yazılır.
+# Yollar bu dosyaya GÖRELİDİR (tablet.src = "ekran.html" → examples/ekran.html).
+
+[video]
+aspect = "16:9"        # 16:9 | 9:16 | 4:5 | 1:1 | 4:3 | 3:4 — komut satırında --aspect ile ezilir
+size = 1080            # kısa kenar px
+fps = 60
+theme = "light"        # light | dark
+hand = "none"          # none = dokunulan yerde DAİRE (varsayılan, önerilen)
+transition = "auto"    # sahneler arası cihaz kayması
+lang = "tr"            # tr | en | zh — çıktı klasörü/altyazı dili
+# music = "bed"        # o videoya özel telifsiz fon müziği (ffmpeg ile üretilir)
+
+# 1) Başlık kartı
+[[scene]]
+type = "title"
+duration = 2.4
+title = "Ürününüzü gösterin."
+subtitle = "Senaryodan videoya — kayıt gerektirmeden."
+badge = "promokit örneği"
+
+# 2) Tablet + HTML ekran: sayfa, daireleri süren AYNI jest listesiyle kare kare oynatılır.
+[[scene]]
+layout = "tablet"                     # tablet | laptop | duo
+duration = 9.0
+tablet = { src = "ekran.html" }       # HTML sayfa ya da video/görüntü dosyası ya da "#renk"
+caption = "Kaydırın, dokunun, yazın, çizin"
+subcaption = "Sayfa jestlere gerçekten tepki verir"
+gestures = [
+  # tek parmak sürükle = KAYDIRMA (ekran-normalize konum: sol üst 0,0 · sağ alt 1,1)
+  { t = 0.6, scroll = [[0.17, 0.80], [0.17, 0.35]], dur = 0.8 },
+  # CSS seçiciyle dokunma: konum sayfadan ölçülür
+  { t = 2.0, tap = "#n6" },
+  { t = 2.8, tap = "#like" },
+  # alana dokun + harf harf yaz
+  { t = 3.6, tap = "#field" },
+  { t = 4.0, type = "Merhaba dünya", rate = 12 },
+  # kalem: mürekkep + basınç (3+ anahtar = vuruş boyunca ince-kalın dalga)
+  { t = 5.6, pen = [[0.45, 0.62], [0.58, 0.50], [0.72, 0.66], [0.86, 0.52]], on = "#sketch", dur = 1.4, pressure = [0.2, 1.0, 0.3] },
+  { t = 7.2, tap = "#c-red" },
+  { t = 7.7, pen = [[0.50, 0.80], [0.80, 0.80]], on = "#sketch", dur = 0.9, pressure = [0.6] },
+]
+# Kamera: t'de başlar, dur saniyede zoom'a varır (at = ekran-normalize nokta)
+camera = [ { t = 3.2, zoom = 1.12, at = [0.65, 0.3], dur = 0.8 }, { t = 5.2, zoom = 1.0, dur = 0.8 } ]
+# Seslendirme (isteğe bağlı): [voice] engine = "say" (Mac, taslak) | "chatterbox" | "google" | "elevenlabs" — README §Seslendirme
+# voice = [ { t = 0.3, text = "Notlarınızı kaydırın, dokunun, yazın." } ]
+
+# 3) Dizüstü + tablet yan yana (yeni bir görsel olmadan düz renk ekran)
+[[scene]]
+layout = "duo"
+duration = 3.0
+laptop = "#1c2230"
+tablet = { src = "ekran.html" }
+caption = "Dizüstü + tablet"
+
+# 4) Kapanış kartı
+[[scene]]
+type = "outro"
+duration = 2.4
+title = "Bu kadar."
+subtitle = "Kendi ekranınızı examples/ekran.html'e göre yazın."

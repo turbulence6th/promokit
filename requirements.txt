@@ -1,0 +1,3 @@
+# Çekirdek: yalnız Pillow (numpy YOK). Ayrıca sistemde ffmpeg + ffprobe gerekir (pip paketi değil).
+Pillow>=10
+# Seslendirme/ses motorları ve TTS modelleri AYRI ortamda kurulur — bkz. README «Seslendirme».
